@@ -197,6 +197,17 @@ type PricingOverview = {
   notes: string[]
 }
 
+type V2Roadmap = {
+  status: string
+  paradigms: Array<{
+    name: string
+    status: string
+    unlock: string
+  }>
+  v1Completed: string[]
+  nextBeforeV2Implementation: string[]
+}
+
 const uiMessages = {
   en: {
     title: 'First-wave execution console',
@@ -278,6 +289,7 @@ root.innerHTML = `
       <article class="panel" id="sync-card"><h2>Sync and replication demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="projection-card"><h2>Projection demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="pricing-card"><h2>Pricing demos</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="v2-roadmap-card"><h2>V2 groundwork</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -351,7 +363,7 @@ async function renderApp() {
   ;(document.querySelector('#hero-title') as HTMLHeadingElement).textContent = copy.title
   ;(document.querySelector('#hero-lede') as HTMLParagraphElement).textContent = copy.lede
   ;(document.querySelector('#locale-label') as HTMLLabelElement).textContent = copy.localeLabel
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap] = await Promise.all([
     fetchEnvelope<BootstrapData>(apiPath(`${apiBase}/bootstrap`)),
     fetchEnvelope<FirstWaveContract>(apiPath(`${apiBase}/first-wave/contract`)),
     fetchEnvelope<SecurityBootstrap>(apiPath(`${apiBase}/security/bootstrap`)),
@@ -366,6 +378,7 @@ async function renderApp() {
     fetchEnvelope<PricingOverview>(apiPath(`${apiBase}/pricing`)),
     fetchEnvelope<DeferredWavesData>(apiPath(`${apiBase}/deferred-waves`)),
     fetchEnvelope<V2Readiness>(apiPath(`${apiBase}/v2-readiness`)),
+    fetchEnvelope<V2Roadmap>(apiPath(`${apiBase}/v2/roadmap`)),
   ])
 
   const heroMeta = document.querySelector('#hero-meta') as HTMLDivElement
@@ -545,6 +558,16 @@ async function renderApp() {
       <button id="pricing-60" class="button">60s freshness</button>
     </div>
     <pre id="pricing-output">${JSON.stringify(pricing.data, null, 2)}</pre>
+  `
+
+  const v2RoadmapCard = document.querySelector('#v2-roadmap-card .body') as HTMLDivElement
+  v2RoadmapCard.innerHTML = `
+    <p><strong>Status:</strong> ${v2Roadmap.data.status}</p>
+    <div class="mini-section"><h4>Paradigms</h4>${list(
+      v2Roadmap.data.paradigms.map((paradigm) => `${paradigm.name} (${paradigm.status}) -> ${paradigm.unlock}`),
+    )}</div>
+    <div class="mini-section"><h4>V1 completed</h4>${list(v2Roadmap.data.v1Completed)}</div>
+    <div class="mini-section"><h4>Before implementation</h4>${list(v2Roadmap.data.nextBeforeV2Implementation)}</div>
   `
 
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement

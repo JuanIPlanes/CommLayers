@@ -229,6 +229,7 @@ func main() {
 	mux.HandleFunc("/api/projections/graph", application.handleProjectionGraph)
 	mux.HandleFunc("/api/projections/vector", application.handleProjectionVector)
 	mux.HandleFunc("/api/pricing", application.handlePricingOverview)
+	mux.HandleFunc("/api/v2/roadmap", application.handleV2Roadmap)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -632,6 +633,34 @@ func (a *app) handleV2Readiness(w http.ResponseWriter, r *http.Request) {
 			"stabilize localization and frontend comparative visualization",
 			"treat pricing as late-stage only",
 			"only then open v2 paradigm implementation planning",
+		},
+	})
+}
+
+func (a *app) handleV2Roadmap(w http.ResponseWriter, r *http.Request) {
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"status": "groundwork_only",
+		"paradigms": []map[string]any{
+			{"name": "reactive_stream_driven", "status": "planned", "unlock": "messaging, sync, and benchmark maturity"},
+			{"name": "local_first_crdt", "status": "planned", "unlock": "sync slice maturity plus conflict strategy stabilization"},
+			{"name": "event_driven_architecture", "status": "planned", "unlock": "transport and messaging slices plus durable event contract"},
+			{"name": "consensus_driven", "status": "planned", "unlock": "coordination semantics beyond bootstrap-grade in-memory demos"},
+			{"name": "planet_scale", "status": "planned", "unlock": "projection, pricing, and frontend comparative maturity"},
+		},
+		"v1Completed": []string{
+			"first-wave foundation",
+			"transport demos",
+			"messaging and workflow demos",
+			"sync and replication demos",
+			"projection demos",
+			"localization slice",
+			"pricing slice",
+		},
+		"nextBeforeV2Implementation": []string{
+			"formalize durable event and projection persistence beyond in-memory demos",
+			"stabilize frontend comparative UX against all v1 backend families",
+			"define real provider integrations that replace demo-grade data sources",
+			"freeze v2 paradigm acceptance gates per paradigm family",
 		},
 	})
 }
