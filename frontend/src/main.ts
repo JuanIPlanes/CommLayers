@@ -180,6 +180,23 @@ type ProjectionOverview = {
   notes: string[]
 }
 
+type PricingOverview = {
+  currency: string
+  selectedFreshness: number
+  prices: Array<{
+    provider: string
+    service: string
+    region: string
+    currency: string
+    hourlyUsd: number
+    freshnessS: number
+    confidence: string
+    staleness: string
+    fallback: boolean
+  }>
+  notes: string[]
+}
+
 const uiMessages = {
   en: {
     title: 'First-wave execution console',
@@ -260,6 +277,7 @@ root.innerHTML = `
       <article class="panel" id="workflow-card"><h2>Messaging and workflow demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="sync-card"><h2>Sync and replication demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="projection-card"><h2>Projection demos</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="pricing-card"><h2>Pricing demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -333,7 +351,7 @@ async function renderApp() {
   ;(document.querySelector('#hero-title') as HTMLHeadingElement).textContent = copy.title
   ;(document.querySelector('#hero-lede') as HTMLParagraphElement).textContent = copy.lede
   ;(document.querySelector('#locale-label') as HTMLLabelElement).textContent = copy.localeLabel
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, deferred, v2] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2] = await Promise.all([
     fetchEnvelope<BootstrapData>(apiPath(`${apiBase}/bootstrap`)),
     fetchEnvelope<FirstWaveContract>(apiPath(`${apiBase}/first-wave/contract`)),
     fetchEnvelope<SecurityBootstrap>(apiPath(`${apiBase}/security/bootstrap`)),
@@ -345,6 +363,7 @@ async function renderApp() {
     fetchEnvelope<MessagingOverview>(apiPath(`${apiBase}/messaging`)),
     fetchEnvelope<SyncOverview>(apiPath(`${apiBase}/sync`)),
     fetchEnvelope<ProjectionOverview>(apiPath(`${apiBase}/projections`)),
+    fetchEnvelope<PricingOverview>(apiPath(`${apiBase}/pricing`)),
     fetchEnvelope<DeferredWavesData>(apiPath(`${apiBase}/deferred-waves`)),
     fetchEnvelope<V2Readiness>(apiPath(`${apiBase}/v2-readiness`)),
   ])
@@ -516,6 +535,18 @@ async function renderApp() {
     <pre id="projection-output">Idle</pre>
   `
 
+  const pricingCard = document.querySelector('#pricing-card .body') as HTMLDivElement
+  pricingCard.innerHTML = `
+    <p>Expose the pricing contract honestly: USD only, selectable freshness, confidence/staleness, and fallback visibility.</p>
+    <div class="mini-section"><h4>Notes</h4>${list(pricing.data.notes)}</div>
+    <div class="button-row">
+      <button id="pricing-5" class="button">5s freshness</button>
+      <button id="pricing-30" class="button">30s freshness</button>
+      <button id="pricing-60" class="button">60s freshness</button>
+    </div>
+    <pre id="pricing-output">${JSON.stringify(pricing.data, null, 2)}</pre>
+  `
+
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement
   deferredCard.innerHTML = `
     <p><strong>Hold manifest:</strong> ${deferred.data.holdManifest}</p>
@@ -645,6 +676,14 @@ async function updateProjectionOutput(mode: 'search' | 'graph' | 'vector') {
 
   output.textContent = 'Loading projection...'
   const response = await fetchEnvelope<unknown>(path)
+  output.textContent = JSON.stringify(response.data, null, 2)
+}
+
+async function updatePricingOutput(freshness: 5 | 30 | 60) {
+  const output = document.querySelector<HTMLPreElement>('#pricing-output')
+  if (!output) return
+  output.textContent = 'Loading pricing...'
+  const response = await fetchEnvelope<PricingOverview>(apiPath(`${apiBase}/pricing?freshness=${freshness}`))
   output.textContent = JSON.stringify(response.data, null, 2)
 }
 
@@ -779,6 +818,17 @@ function wireProjectionDemo() {
   vectorButton.addEventListener('click', () => updateProjectionOutput('vector'))
 }
 
+function wirePricingDemo() {
+  const pricing5 = document.querySelector<HTMLButtonElement>('#pricing-5')
+  const pricing30 = document.querySelector<HTMLButtonElement>('#pricing-30')
+  const pricing60 = document.querySelector<HTMLButtonElement>('#pricing-60')
+  if (!pricing5 || !pricing30 || !pricing60) return
+
+  pricing5.addEventListener('click', () => updatePricingOutput(5))
+  pricing30.addEventListener('click', () => updatePricingOutput(30))
+  pricing60.addEventListener('click', () => updatePricingOutput(60))
+}
+
 renderApp().catch((error) => {
   root.innerHTML = `<main class="shell"><section class="panel"><h1>Bootstrap failed</h1><pre>${error instanceof Error ? error.message : 'Unknown error'}</pre></section></main>`
 })
@@ -789,4 +839,5 @@ wireTransportDemos()
 wireWorkflowDemo()
 wireSyncDemo()
 wireProjectionDemo()
+wirePricingDemo()
 wireLocaleSwitcher()

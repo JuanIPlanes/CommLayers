@@ -187,6 +187,18 @@ type vectorDoc struct {
 	Transport string    `json:"transport"`
 }
 
+type pricePoint struct {
+	Provider   string  `json:"provider"`
+	Service    string  `json:"service"`
+	Region     string  `json:"region"`
+	Currency   string  `json:"currency"`
+	HourlyUSD  float64 `json:"hourlyUsd"`
+	FreshnessS int     `json:"freshnessS"`
+	Confidence string  `json:"confidence"`
+	Staleness  string  `json:"staleness"`
+	Fallback   bool    `json:"fallback"`
+}
+
 func main() {
 	application := newApp()
 
@@ -216,6 +228,7 @@ func main() {
 	mux.HandleFunc("/api/projections/search", application.handleProjectionSearch)
 	mux.HandleFunc("/api/projections/graph", application.handleProjectionGraph)
 	mux.HandleFunc("/api/projections/vector", application.handleProjectionVector)
+	mux.HandleFunc("/api/pricing", application.handlePricingOverview)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -885,6 +898,56 @@ func (a *app) handleProjectionVector(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *app) handlePricingOverview(w http.ResponseWriter, r *http.Request) {
+	locale := localeFromRequest(r)
+	freshness := parseFreshness(r.URL.Query().Get("freshness"))
+	prices := []pricePoint{
+		{
+			Provider:   "aws-demo",
+			Service:    "realtime-api-node",
+			Region:     "us-east-1",
+			Currency:   "USD",
+			HourlyUSD:  0.126,
+			FreshnessS: freshness,
+			Confidence: confidenceForFreshness(freshness),
+			Staleness:  stalenessForFreshness(freshness),
+			Fallback:   false,
+		},
+		{
+			Provider:   "gcp-demo",
+			Service:    "workflow-worker-node",
+			Region:     "us-central1",
+			Currency:   "USD",
+			HourlyUSD:  0.118,
+			FreshnessS: freshness,
+			Confidence: confidenceForFreshness(freshness + 5),
+			Staleness:  stalenessForFreshness(freshness + 5),
+			Fallback:   false,
+		},
+		{
+			Provider:   "onprem-demo",
+			Service:    "postgres-redis-footprint",
+			Region:     "dc-lab-01",
+			Currency:   "USD",
+			HourlyUSD:  0.081,
+			FreshnessS: freshness + 15,
+			Confidence: confidenceForFreshness(freshness + 15),
+			Staleness:  stalenessForFreshness(freshness + 15),
+			Fallback:   true,
+		},
+	}
+
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"currency":          "USD",
+		"selectedFreshness": freshness,
+		"prices":            prices,
+		"notes": []string{
+			msg(locale, "pricing.note.one"),
+			msg(locale, "pricing.note.two"),
+		},
+	})
+}
+
 func (a *app) handleSyncSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -1271,6 +1334,37 @@ func cosineSimilarity(a []float64, b []float64) float64 {
 		return 0
 	}
 	return dot / (sqrt(normA) * sqrt(normB))
+}
+
+func parseFreshness(value string) int {
+	switch value {
+	case "30":
+		return 30
+	case "60":
+		return 60
+	default:
+		return 5
+	}
+}
+
+func stalenessForFreshness(seconds int) string {
+	if seconds <= 5 {
+		return "fresh"
+	}
+	if seconds <= 30 {
+		return "warning"
+	}
+	return "stale"
+}
+
+func confidenceForFreshness(seconds int) string {
+	if seconds <= 5 {
+		return "high"
+	}
+	if seconds <= 30 {
+		return "medium"
+	}
+	return "low"
 }
 
 func sqrt(value float64) float64 {
