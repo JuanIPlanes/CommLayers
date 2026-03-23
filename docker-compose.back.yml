@@ -1,0 +1,114 @@
+name: commlayers-back
+
+services:
+  api:
+    build:
+      context: ./services/api
+    container_name: commlayers-api
+    ports:
+      - "8080:8080"
+    environment:
+      CORS_ALLOW_ORIGIN: http://localhost:4173
+      POSTGRES_URL: postgres://commlayers:commlayers@postgres:5432/commlayers?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - commlayers_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: commlayers-postgres
+    environment:
+      POSTGRES_USER: commlayers
+      POSTGRES_PASSWORD: commlayers
+      POSTGRES_DB: commlayers
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commlayers -d commlayers"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    volumes:
+      - commlayers_postgres_data:/var/lib/postgresql/data
+    networks:
+      - commlayers_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: commlayers-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - commlayers_redis_data:/data
+    networks:
+      - commlayers_net
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: commlayers-elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - commlayers_elasticsearch_data:/usr/share/elasticsearch/data
+    profiles: ["search"]
+    networks:
+      - commlayers_net
+
+  neo4j:
+    image: neo4j:5.25
+    container_name: commlayers-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/commlayers123
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - commlayers_neo4j_data:/data
+    profiles: ["graph"]
+    networks:
+      - commlayers_net
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.1
+    container_name: commlayers-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - commlayers_qdrant_data:/qdrant/storage
+    profiles: ["vector"]
+    networks:
+      - commlayers_net
+
+  mongo:
+    image: mongo:7
+    container_name: commlayers-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - commlayers_mongo_data:/data/db
+    profiles: ["mongo"]
+    networks:
+      - commlayers_net
+
+volumes:
+  commlayers_postgres_data:
+  commlayers_redis_data:
+  commlayers_elasticsearch_data:
+  commlayers_neo4j_data:
+  commlayers_qdrant_data:
+  commlayers_mongo_data:
+
+networks:
+  commlayers_net:
+    name: commlayers_net

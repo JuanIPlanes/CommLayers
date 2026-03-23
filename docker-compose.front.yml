@@ -1,0 +1,16 @@
+name: commlayers-front
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+    container_name: commlayers-frontend
+    ports:
+      - "4173:80"
+    networks:
+      - commlayers_net
+
+networks:
+  commlayers_net:
+    external: true
+    name: commlayers_net
