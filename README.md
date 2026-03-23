@@ -73,7 +73,8 @@ docker compose -f docker-compose.front.yml up --build -d
 
 Open:
 - frontend: `http://localhost:4173`
-- api health: `http://localhost:8080/healthz`
+- health via frontend gateway: `http://localhost:4173/healthz`
+- bootstrap via frontend gateway: `http://localhost:4173/api/bootstrap`
 
 Optional profiles on the backend stack:
 
@@ -110,6 +111,7 @@ Validation result at the current stage:
 - frontend production build passed
 - backend compose config passed
 - frontend compose config passed
+- full split stack startup passed through the frontend gateway on `4173`
 
 ## Notes
 
