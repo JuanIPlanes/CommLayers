@@ -19,6 +19,7 @@ type app struct {
 	startedAt time.Time
 	jobs      sync.Map
 	sessions  sync.Map
+	workflows sync.Map
 	streams   []stream
 	families  []family
 	waves     []deferredWave
@@ -96,6 +97,18 @@ type transportSession struct {
 	UpdatedAt         string   `json:"updatedAt"`
 }
 
+type workflowRun struct {
+	ID             string   `json:"id"`
+	Status         string   `json:"status"`
+	Queue          string   `json:"queue"`
+	CurrentStage   string   `json:"currentStage"`
+	Progress       int      `json:"progress"`
+	DelayAppliedMS int      `json:"delayAppliedMs"`
+	Timeline       []string `json:"timeline"`
+	CreatedAt      string   `json:"createdAt"`
+	UpdatedAt      string   `json:"updatedAt"`
+}
+
 func main() {
 	application := newApp()
 
@@ -115,6 +128,9 @@ func main() {
 	mux.HandleFunc("/api/transports", application.handleTransportSummary)
 	mux.HandleFunc("/api/transports/polling", application.handlePollingSession)
 	mux.HandleFunc("/api/transports/polling/", application.handlePollingStatus)
+	mux.HandleFunc("/api/messaging", application.handleMessagingOverview)
+	mux.HandleFunc("/api/messaging/workflows", application.handleWorkflowCreate)
+	mux.HandleFunc("/api/messaging/workflows/", application.handleWorkflowStatus)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -608,6 +624,71 @@ func (a *app) handleWebSocketDemo(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *app) handleMessagingOverview(w http.ResponseWriter, r *http.Request) {
+	writeEnvelope(w, http.StatusOK, map[string]any{
+		"families": []map[string]any{
+			{"name": "job_queue", "status": "demo-available", "useFor": []string{"background work", "deferred execution"}},
+			{"name": "workflow_engine", "status": "demo-available", "useFor": []string{"multi-stage orchestration", "retry visibility"}},
+			{"name": "broker_event_bus", "status": "planned", "useFor": []string{"fan-out and durable eventing after bootstrap maturity"}},
+		},
+		"notes": []string{
+			"This slice uses an in-memory workflow run rather than a real broker.",
+			"The goal is to expose queue and stage transitions clearly through the frontend before adding distributed messaging infrastructure.",
+		},
+	})
+}
+
+func (a *app) handleWorkflowCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	run := workflowRun{
+		ID:             fmt.Sprintf("workflow-%d", time.Now().UnixNano()),
+		Status:         "queued",
+		Queue:          "bootstrap-workflow-queue",
+		CurrentStage:   "queued",
+		Progress:       0,
+		DelayAppliedMS: 1200,
+		Timeline:       []string{"queued"},
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	a.workflows.Store(run.ID, run)
+	w.Header().Set("Location", "/api/messaging/workflows/"+run.ID)
+	writeEnvelope(w, http.StatusCreated, map[string]any{
+		"workflow":  run,
+		"statusUrl": "/api/messaging/workflows/" + run.ID,
+	})
+}
+
+func (a *app) handleWorkflowStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/messaging/workflows/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_workflow_id"})
+		return
+	}
+
+	raw, ok := a.workflows.Load(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "workflow_not_found"})
+		return
+	}
+
+	run := nextWorkflowState(raw.(workflowRun))
+	a.workflows.Store(id, run)
+	writeEnvelope(w, http.StatusOK, run)
+}
+
 func (a *app) handleRealtimeComparisons(w http.ResponseWriter, r *http.Request) {
 	comparisons := []comparison{
 		{
@@ -784,6 +865,41 @@ func nextTransportSessionState(session transportSession) transportSession {
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	session.Timeline = append(session.Timeline, step.name)
 	return session
+}
+
+func nextWorkflowState(run workflowRun) workflowRun {
+	steps := []struct {
+		stage    string
+		status   string
+		progress int
+	}{
+		{stage: "dequeued", status: "running", progress: 20},
+		{stage: "handler_started", status: "running", progress: 45},
+		{stage: "workflow_transition", status: "running", progress: 75},
+		{stage: "completed", status: "completed", progress: 100},
+	}
+
+	if run.Status == "completed" {
+		return run
+	}
+
+	index := len(run.Timeline) - 1
+	if index >= len(steps) {
+		run.Status = "completed"
+		run.CurrentStage = "completed"
+		run.Progress = 100
+		run.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		return run
+	}
+
+	step := steps[index]
+	time.Sleep(time.Duration(run.DelayAppliedMS) * time.Millisecond)
+	run.Status = step.status
+	run.CurrentStage = step.stage
+	run.Progress = step.progress
+	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	run.Timeline = append(run.Timeline, step.stage)
+	return run
 }
 
 func recommendedDelay(mode string) int {

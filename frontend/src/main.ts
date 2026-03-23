@@ -153,6 +153,15 @@ type TransportSummary = {
   notes: string[]
 }
 
+type MessagingOverview = {
+  families: Array<{
+    name: string
+    status: string
+    useFor: string[]
+  }>
+  notes: string[]
+}
+
 type JobState = {
   id: string
   status: string
@@ -203,6 +212,7 @@ root.innerHTML = `
       <article class="panel" id="catalog-card"><h2>Catalog snapshot</h2><div class="body">Loading...</div></article>
       <article class="panel" id="realtime-card"><h2>Realtime guidance</h2><div class="body">Loading...</div></article>
       <article class="panel" id="transport-card"><h2>Transport demos</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="workflow-card"><h2>Messaging and workflow demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -267,7 +277,7 @@ async function fetchEnvelope<T>(path: string): Promise<Envelope<T>> {
 }
 
 async function renderApp() {
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, deferred, v2] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, deferred, v2] = await Promise.all([
     fetchEnvelope<BootstrapData>(`${apiBase}/bootstrap`),
     fetchEnvelope<FirstWaveContract>(`${apiBase}/first-wave/contract`),
     fetchEnvelope<SecurityBootstrap>(`${apiBase}/security/bootstrap`),
@@ -276,6 +286,7 @@ async function renderApp() {
     fetchEnvelope<CatalogData>(`${apiBase}/catalog`),
     fetchEnvelope<RealtimeComparisons>(`${apiBase}/comparisons/realtime`),
     fetchEnvelope<TransportSummary>(`${apiBase}/transports`),
+    fetchEnvelope<MessagingOverview>(`${apiBase}/messaging`),
     fetchEnvelope<DeferredWavesData>(`${apiBase}/deferred-waves`),
     fetchEnvelope<V2Readiness>(`${apiBase}/v2-readiness`),
   ])
@@ -403,6 +414,19 @@ async function renderApp() {
     <pre id="transport-output">Idle</pre>
   `
 
+  const workflowCard = document.querySelector('#workflow-card .body') as HTMLDivElement
+  workflowCard.innerHTML = `
+    <p>Exercise the next sequential backend-family slice without introducing a real broker yet.</p>
+    <div class="mini-section"><h4>Families</h4>${list(
+      messaging.data.families.map((family) => `${family.name} (${family.status}) -> ${family.useFor.join(', ')}`),
+    )}</div>
+    <div class="mini-section"><h4>Notes</h4>${list(messaging.data.notes)}</div>
+    <div class="button-row">
+      <button id="run-workflow" class="button">Run workflow demo</button>
+    </div>
+    <pre id="workflow-output">Idle</pre>
+  `
+
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement
   deferredCard.innerHTML = `
     <p><strong>Hold manifest:</strong> ${deferred.data.holdManifest}</p>
@@ -472,6 +496,25 @@ function runWebSocketDemo() {
 
   socket.onclose = () => {
     button.disabled = false
+  }
+}
+
+async function runWorkflowDemo() {
+  const output = document.querySelector<HTMLPreElement>('#workflow-output')
+  if (!output) return
+
+  output.textContent = 'Creating workflow run...'
+  const create = await fetch(`${apiBase}/messaging/workflows`, { method: 'POST' })
+  const created = (await create.json()) as Envelope<{ statusUrl: string; workflow: unknown }>
+  const states: unknown[] = [created.data.workflow]
+  output.textContent = JSON.stringify(states, null, 2)
+
+  let done = false
+  while (!done) {
+    const response = await fetchEnvelope<{ status: string }>(`${eventBase}${created.data.statusUrl}`)
+    states.push(response.data)
+    output.textContent = JSON.stringify(states, null, 2)
+    done = response.data.status === 'completed'
   }
 }
 
@@ -558,6 +601,20 @@ function wireTransportDemos() {
   websocketButton.addEventListener('click', runWebSocketDemo)
 }
 
+function wireWorkflowDemo() {
+  const button = document.querySelector<HTMLButtonElement>('#run-workflow')
+  if (!button) return
+
+  button.addEventListener('click', async () => {
+    button.disabled = true
+    try {
+      await runWorkflowDemo()
+    } finally {
+      button.disabled = false
+    }
+  })
+}
+
 renderApp().catch((error) => {
   root.innerHTML = `<main class="shell"><section class="panel"><h1>Bootstrap failed</h1><pre>${error instanceof Error ? error.message : 'Unknown error'}</pre></section></main>`
 })
@@ -565,3 +622,4 @@ renderApp().catch((error) => {
 startEvents()
 wireAsyncDemo()
 wireTransportDemos()
+wireWorkflowDemo()
