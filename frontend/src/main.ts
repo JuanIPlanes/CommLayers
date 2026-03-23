@@ -171,6 +171,15 @@ type SyncOverview = {
   notes: string[]
 }
 
+type ProjectionOverview = {
+  families: Array<{
+    name: string
+    status: string
+    useFor: string[]
+  }>
+  notes: string[]
+}
+
 type JobState = {
   id: string
   status: string
@@ -224,6 +233,7 @@ root.innerHTML = `
       <article class="panel" id="transport-card"><h2>Transport demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="workflow-card"><h2>Messaging and workflow demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="sync-card"><h2>Sync and replication demos</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="projection-card"><h2>Projection demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -288,7 +298,7 @@ async function fetchEnvelope<T>(path: string): Promise<Envelope<T>> {
 }
 
 async function renderApp() {
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, deferred, v2] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, deferred, v2] = await Promise.all([
     fetchEnvelope<BootstrapData>(`${apiBase}/bootstrap`),
     fetchEnvelope<FirstWaveContract>(`${apiBase}/first-wave/contract`),
     fetchEnvelope<SecurityBootstrap>(`${apiBase}/security/bootstrap`),
@@ -299,6 +309,7 @@ async function renderApp() {
     fetchEnvelope<TransportSummary>(`${apiBase}/transports`),
     fetchEnvelope<MessagingOverview>(`${apiBase}/messaging`),
     fetchEnvelope<SyncOverview>(`${apiBase}/sync`),
+    fetchEnvelope<ProjectionOverview>(`${apiBase}/projections`),
     fetchEnvelope<DeferredWavesData>(`${apiBase}/deferred-waves`),
     fetchEnvelope<V2Readiness>(`${apiBase}/v2-readiness`),
   ])
@@ -455,6 +466,21 @@ async function renderApp() {
     <pre id="sync-output">Idle</pre>
   `
 
+  const projectionCard = document.querySelector('#projection-card .body') as HTMLDivElement
+  projectionCard.innerHTML = `
+    <p>Exercise the projection family without pretending real search, graph, or vector engines are wired yet.</p>
+    <div class="mini-section"><h4>Families</h4>${list(
+      projections.data.families.map((family) => `${family.name} (${family.status}) -> ${family.useFor.join(', ')}`),
+    )}</div>
+    <div class="mini-section"><h4>Notes</h4>${list(projections.data.notes)}</div>
+    <div class="button-row">
+      <button id="run-search" class="button">Search projection</button>
+      <button id="run-graph" class="button">Graph projection</button>
+      <button id="run-vector" class="button">Vector projection</button>
+    </div>
+    <pre id="projection-output">Idle</pre>
+  `
+
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement
   deferredCard.innerHTML = `
     <p><strong>Hold manifest:</strong> ${deferred.data.holdManifest}</p>
@@ -571,6 +597,22 @@ async function updateSyncOutput(action: 'create' | 'mutate' | 'replicate', targe
   output.textContent = JSON.stringify(response.data, null, 2)
 }
 
+async function updateProjectionOutput(mode: 'search' | 'graph' | 'vector') {
+  const output = document.querySelector<HTMLPreElement>('#projection-output')
+  if (!output) return
+
+  let path = `${apiBase}/projections/graph`
+  if (mode === 'search') {
+    path = `${apiBase}/projections/search?q=workflow`
+  } else if (mode === 'vector') {
+    path = `${apiBase}/projections/vector?q=sync merge`
+  }
+
+  output.textContent = 'Loading projection...'
+  const response = await fetchEnvelope<unknown>(path)
+  output.textContent = JSON.stringify(response.data, null, 2)
+}
+
 function startEvents() {
   const listNode = document.querySelector('#events-list') as HTMLUListElement
   const source = new EventSource(`${eventBase}/api/events`)
@@ -681,6 +723,17 @@ function wireSyncDemo() {
   replicateButton.addEventListener('click', () => updateSyncOutput('replicate'))
 }
 
+function wireProjectionDemo() {
+  const searchButton = document.querySelector<HTMLButtonElement>('#run-search')
+  const graphButton = document.querySelector<HTMLButtonElement>('#run-graph')
+  const vectorButton = document.querySelector<HTMLButtonElement>('#run-vector')
+  if (!searchButton || !graphButton || !vectorButton) return
+
+  searchButton.addEventListener('click', () => updateProjectionOutput('search'))
+  graphButton.addEventListener('click', () => updateProjectionOutput('graph'))
+  vectorButton.addEventListener('click', () => updateProjectionOutput('vector'))
+}
+
 renderApp().catch((error) => {
   root.innerHTML = `<main class="shell"><section class="panel"><h1>Bootstrap failed</h1><pre>${error instanceof Error ? error.message : 'Unknown error'}</pre></section></main>`
 })
@@ -690,3 +743,4 @@ wireAsyncDemo()
 wireTransportDemos()
 wireWorkflowDemo()
 wireSyncDemo()
+wireProjectionDemo()

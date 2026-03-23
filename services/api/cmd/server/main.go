@@ -16,14 +16,17 @@ import (
 )
 
 type app struct {
-	startedAt time.Time
-	jobs      sync.Map
-	sessions  sync.Map
-	workflows sync.Map
-	syncRuns  sync.Map
-	streams   []stream
-	families  []family
-	waves     []deferredWave
+	startedAt      time.Time
+	jobs           sync.Map
+	sessions       sync.Map
+	workflows      sync.Map
+	syncRuns       sync.Map
+	projectionDocs []projectionDoc
+	graphNodes     []graphNode
+	vectorDocs     []vectorDoc
+	streams        []stream
+	families       []family
+	waves          []deferredWave
 }
 
 type stream struct {
@@ -125,6 +128,29 @@ type syncSession struct {
 	UpdatedAt       string   `json:"updatedAt"`
 }
 
+type projectionDoc struct {
+	ID      string   `json:"id"`
+	Title   string   `json:"title"`
+	Tokens  []string `json:"tokens"`
+	Summary string   `json:"summary"`
+}
+
+type graphNode struct {
+	ID          string   `json:"id"`
+	Label       string   `json:"label"`
+	DependsOn   []string `json:"dependsOn"`
+	Category    string   `json:"category"`
+	Description string   `json:"description"`
+}
+
+type vectorDoc struct {
+	ID        string    `json:"id"`
+	Label     string    `json:"label"`
+	Vector    []float64 `json:"vector"`
+	Summary   string    `json:"summary"`
+	Transport string    `json:"transport"`
+}
+
 func main() {
 	application := newApp()
 
@@ -150,6 +176,10 @@ func main() {
 	mux.HandleFunc("/api/sync", application.handleSyncOverview)
 	mux.HandleFunc("/api/sync/sessions", application.handleSyncSessionCreate)
 	mux.HandleFunc("/api/sync/sessions/", application.handleSyncSessionAction)
+	mux.HandleFunc("/api/projections", application.handleProjectionOverview)
+	mux.HandleFunc("/api/projections/search", application.handleProjectionSearch)
+	mux.HandleFunc("/api/projections/graph", application.handleProjectionGraph)
+	mux.HandleFunc("/api/projections/vector", application.handleProjectionVector)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -360,6 +390,23 @@ func newApp() *app {
 				Focus:            []string{"paradigm taxonomy", "unlock prerequisites", "future implementation boundaries"},
 				ReactivationRule: []string{"V1 backend-family maturity is proven.", "Frontend comparison layer is stable."},
 			},
+		},
+		projectionDocs: []projectionDoc{
+			{ID: "doc-search-1", Title: "SSE default push", Tokens: []string{"sse", "push", "status", "one-way"}, Summary: "SSE is the current default push channel for one-way updates."},
+			{ID: "doc-search-2", Title: "Workflow orchestration", Tokens: []string{"workflow", "queue", "retry", "orchestration"}, Summary: "Workflow demos expose queued, running, and completed stages without a real broker yet."},
+			{ID: "doc-search-3", Title: "Sync merge demo", Tokens: []string{"sync", "replication", "conflict", "merge"}, Summary: "Sync demos show primary/replica drift and explicit merge behavior."},
+		},
+		graphNodes: []graphNode{
+			{ID: "request_response", Label: "Request response", DependsOn: []string{}, Category: "transport", Description: "Reference case for bounded request-reply work."},
+			{ID: "server_sent_events", Label: "SSE", DependsOn: []string{"request_response"}, Category: "transport", Description: "Default push channel for one-way updates."},
+			{ID: "websocket", Label: "WebSocket", DependsOn: []string{"request_response"}, Category: "transport", Description: "Planned duplex transport when truly needed."},
+			{ID: "workflow_engine", Label: "Workflow engine", DependsOn: []string{"request_response", "server_sent_events"}, Category: "messaging", Description: "Visible queue and workflow state transitions."},
+			{ID: "sync_replication", Label: "Sync replication", DependsOn: []string{"workflow_engine"}, Category: "sync", Description: "Primary/replica drift and explicit merge behavior."},
+		},
+		vectorDocs: []vectorDoc{
+			{ID: "vec-1", Label: "SSE progress", Vector: []float64{0.9, 0.1, 0.0}, Summary: "One-way progress and status feed", Transport: "sse"},
+			{ID: "vec-2", Label: "Workflow queue", Vector: []float64{0.2, 0.9, 0.1}, Summary: "Queued and staged orchestration", Transport: "workflow"},
+			{ID: "vec-3", Label: "Sync conflict", Vector: []float64{0.2, 0.3, 0.95}, Summary: "Conflict and merge-heavy collaboration", Transport: "sync"},
 		},
 	}
 }
@@ -722,6 +769,79 @@ func (a *app) handleSyncOverview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *app) handleProjectionOverview(w http.ResponseWriter, r *http.Request) {
+	writeEnvelope(w, http.StatusOK, map[string]any{
+		"families": []map[string]any{
+			{"name": "search_projection", "status": "demo-available", "useFor": []string{"token lookup", "summary retrieval"}},
+			{"name": "graph_projection", "status": "demo-available", "useFor": []string{"dependency traversal", "topology visibility"}},
+			{"name": "vector_projection", "status": "demo-available", "useFor": []string{"similarity ranking", "capability clustering"}},
+		},
+		"notes": []string{
+			"These demos are in-memory projections, not real Elasticsearch/Neo4j/Qdrant integrations.",
+			"The goal is to prove the projection family surface before attaching heavyweight engines later.",
+		},
+	})
+}
+
+func (a *app) handleProjectionSearch(w http.ResponseWriter, r *http.Request) {
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	results := make([]projectionDoc, 0)
+	for _, doc := range a.projectionDocs {
+		if query == "" || containsToken(doc.Tokens, query) || strings.Contains(strings.ToLower(doc.Title), query) || strings.Contains(strings.ToLower(doc.Summary), query) {
+			results = append(results, doc)
+		}
+	}
+	writeEnvelope(w, http.StatusOK, map[string]any{
+		"query":   query,
+		"results": results,
+		"mode":    "demo-inmemory-search",
+	})
+}
+
+func (a *app) handleProjectionGraph(w http.ResponseWriter, r *http.Request) {
+	nodes := make([]graphNode, len(a.graphNodes))
+	copy(nodes, a.graphNodes)
+	edges := make([]map[string]string, 0)
+	for _, node := range nodes {
+		for _, dep := range node.DependsOn {
+			edges = append(edges, map[string]string{"from": node.ID, "to": dep})
+		}
+	}
+	writeEnvelope(w, http.StatusOK, map[string]any{
+		"nodes": nodes,
+		"edges": edges,
+		"mode":  "demo-inmemory-graph",
+	})
+}
+
+func (a *app) handleProjectionVector(w http.ResponseWriter, r *http.Request) {
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	queryVector := guessVector(query)
+	type ranked struct {
+		ID        string  `json:"id"`
+		Label     string  `json:"label"`
+		Score     float64 `json:"score"`
+		Summary   string  `json:"summary"`
+		Transport string  `json:"transport"`
+	}
+	rankedDocs := make([]ranked, 0, len(a.vectorDocs))
+	for _, doc := range a.vectorDocs {
+		rankedDocs = append(rankedDocs, ranked{
+			ID:        doc.ID,
+			Label:     doc.Label,
+			Score:     cosineSimilarity(queryVector, doc.Vector),
+			Summary:   doc.Summary,
+			Transport: doc.Transport,
+		})
+	}
+	sort.Slice(rankedDocs, func(i, j int) bool { return rankedDocs[i].Score > rankedDocs[j].Score })
+	writeEnvelope(w, http.StatusOK, map[string]any{
+		"query":   query,
+		"results": rankedDocs,
+		"mode":    "demo-inmemory-vector",
+	})
+}
+
 func (a *app) handleSyncSessionCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -1072,6 +1192,53 @@ func replicateSyncSession(session syncSession) syncSession {
 	session.Lag = 0
 	session.Status = "aligned"
 	return session
+}
+
+func containsToken(tokens []string, query string) bool {
+	for _, token := range tokens {
+		if token == query {
+			return true
+		}
+	}
+	return false
+}
+
+func guessVector(query string) []float64 {
+	switch {
+	case strings.Contains(query, "sync") || strings.Contains(query, "merge"):
+		return []float64{0.2, 0.3, 1.0}
+	case strings.Contains(query, "workflow") || strings.Contains(query, "queue"):
+		return []float64{0.2, 1.0, 0.1}
+	default:
+		return []float64{1.0, 0.1, 0.0}
+	}
+}
+
+func cosineSimilarity(a []float64, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (sqrt(normA) * sqrt(normB))
+}
+
+func sqrt(value float64) float64 {
+	guess := value
+	if guess == 0 {
+		return 0
+	}
+	for i := 0; i < 8; i++ {
+		guess = 0.5 * (guess + value/guess)
+	}
+	return guess
 }
 
 func abs(value int) int {
