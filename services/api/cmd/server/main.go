@@ -77,6 +77,42 @@ type responseEnvelope struct {
 	Confidence string `json:"confidence"`
 	Staleness  string `json:"staleness"`
 	MeasuredAt string `json:"measuredAt"`
+	Locale     string `json:"locale"`
+}
+
+var messages = map[string]map[string]string{
+	"en": {
+		"bootstrap.summary":   "Backend-first bootstrap with a concrete first-wave contract surface and deferred later waves.",
+		"bootstrap.phase":     "first-wave materialized",
+		"bootstrap.go_no_go":  "Hold until 86agbv0k4 is finalized, 86agbv0k3 and 86agbv0k7 overlap safely, and 86agbv0k9 closes the wave.",
+		"catalog.note.one":    "This is the first working version, not the full platform.",
+		"catalog.note.two":    "Later backend families remain staged until the first-wave closure gate is accepted.",
+		"catalog.note.three":  "SSE is the default push example in the bootstrap; WebSocket remains planned, not fully implemented.",
+		"security.state":      "documented and staged; runtime integration intentionally deferred in the first working version",
+		"messaging.note.one":  "This slice uses an in-memory workflow run rather than a real broker.",
+		"messaging.note.two":  "The goal is to expose queue and stage transitions clearly through the frontend before adding distributed messaging infrastructure.",
+		"sync.note.one":       "This slice models sync and replication in memory to keep the bootstrap honest and observable.",
+		"sync.note.two":       "Replication is explicit and conflict resolution is surfaced as visible state rather than hidden machinery.",
+		"projection.note.one": "These demos are in-memory projections, not real Elasticsearch/Neo4j/Qdrant integrations.",
+		"projection.note.two": "The goal is to prove the projection family surface before attaching heavyweight engines later.",
+		"v2.status":           "not_started",
+	},
+	"es": {
+		"bootstrap.summary":   "Bootstrap backend-first con una superficie contractual concreta de primera ola y olas posteriores diferidas.",
+		"bootstrap.phase":     "primera ola materializada",
+		"bootstrap.go_no_go":  "Esperar hasta que 86agbv0k4 quede finalizado, 86agbv0k3 y 86agbv0k7 se superpongan de forma segura, y 86agbv0k9 cierre la ola.",
+		"catalog.note.one":    "Esta es la primera version funcional, no la plataforma completa.",
+		"catalog.note.two":    "Las familias backend posteriores siguen en espera hasta que se acepte el cierre de la primera ola.",
+		"catalog.note.three":  "SSE es el ejemplo push por defecto en el bootstrap; WebSocket sigue planificado pero no totalmente implementado.",
+		"security.state":      "documentado y preparado; la integracion runtime se difiere intencionalmente en esta primera version funcional",
+		"messaging.note.one":  "Esta porcion usa una ejecucion de workflow en memoria en lugar de un broker real.",
+		"messaging.note.two":  "El objetivo es exponer con claridad las transiciones de cola y etapas en el frontend antes de agregar infraestructura de mensajeria distribuida.",
+		"sync.note.one":       "Esta porcion modela sincronizacion y replicacion en memoria para mantener el bootstrap honesto y observable.",
+		"sync.note.two":       "La replicacion es explicita y la resolucion de conflictos se muestra como estado visible en lugar de maquinaria oculta.",
+		"projection.note.one": "Estas demos son proyecciones en memoria, no integraciones reales con Elasticsearch/Neo4j/Qdrant.",
+		"projection.note.two": "El objetivo es probar la superficie de la familia de proyecciones antes de conectar motores pesados mas adelante.",
+		"v2.status":           "no_iniciado",
+	},
 }
 
 type comparison struct {
@@ -421,8 +457,9 @@ func (a *app) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleBootstrap(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
-		"summary": "Backend-first bootstrap with a concrete first-wave contract surface and deferred later waves.",
+	locale := localeFromRequest(r)
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"summary": msg(locale, "bootstrap.summary"),
 		"phase":   "first-wave materialized",
 		"repo":    "https://github.com/JuanIPlanes/CommLayers",
 		"runtime": map[string]any{
@@ -435,7 +472,7 @@ func (a *app) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		"now": map[string]any{
 			"activeStreams":           []string{"86agbv0k4", "86agbv0k3", "86agbv0k7", "86agbv0k9"},
 			"executionOrder":          []string{"86agbv0k4", "86agbv0k3", "86agbv0k7", "86agbv0k9"},
-			"goNoGoForImplementation": "Hold until 86agbv0k4 is finalized, 86agbv0k3 and 86agbv0k7 overlap safely, and 86agbv0k9 closes the wave.",
+			"goNoGoForImplementation": msg(locale, "bootstrap.go_no_go"),
 		},
 		"notYet": []string{
 			"Keycloak runtime integration",
@@ -458,12 +495,13 @@ func (a *app) handleStreams(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleCatalog(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	locale := localeFromRequest(r)
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"families": a.families,
 		"notes": []string{
-			"This is the first working version, not the full platform.",
-			"Later backend families remain staged until the first-wave closure gate is accepted.",
-			"SSE is the default push example in the bootstrap; WebSocket remains planned, not fully implemented.",
+			msg(locale, "catalog.note.one"),
+			msg(locale, "catalog.note.two"),
+			msg(locale, "catalog.note.three"),
 		},
 	})
 }
@@ -471,7 +509,7 @@ func (a *app) handleCatalog(w http.ResponseWriter, r *http.Request) {
 func (a *app) handleFirstWaveContract(w http.ResponseWriter, r *http.Request) {
 	active := filterStreams(a.streams, func(s stream) bool { return s.Category == "first-wave" })
 	sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"executionOrder": []string{"86agbv0k4", "86agbv0k3", "86agbv0k7", "86agbv0k9"},
 		"streams":        active,
 		"rules": []string{
@@ -494,7 +532,8 @@ func (a *app) handleFirstWaveStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleSecurityBootstrap(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	locale := localeFromRequest(r)
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"identity": map[string]any{
 			"provider":          "Keycloak",
 			"browserPattern":    "BFF-oriented Authorization Code + PKCE",
@@ -512,12 +551,12 @@ func (a *app) handleSecurityBootstrap(w http.ResponseWriter, r *http.Request) {
 			{"phase": 2, "name": "selective mTLS", "goal": "protect critical service pairs without blocking bootstrap"},
 			{"phase": 3, "name": "strict east-west mTLS", "goal": "enforce workload identity and authorization after observability is ready"},
 		},
-		"currentState": "documented and staged; runtime integration intentionally deferred in the first working version",
+		"currentState": msg(locale, "security.state"),
 	})
 }
 
 func (a *app) handleDataPlatform(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"canonicalStores": []map[string]any{
 			{"name": "PostgreSQL", "role": "system of record", "status": "active in compose", "why": "canonical truth, auditability, schema evolution"},
 			{"name": "Redis", "role": "ephemeral speed layer", "status": "active in compose", "why": "cache, rate limiting, short-lived coordination"},
@@ -537,7 +576,7 @@ func (a *app) handleDataPlatform(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleBenchmarkFramework(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"benchmarkMatrix": []map[string]any{
 			{"name": "request baseline", "measures": []string{"p50", "p95", "p99", "error rate"}},
 			{"name": "SSE startup and event cadence", "measures": []string{"stream startup latency", "event flush latency", "delay metadata"}},
@@ -557,15 +596,16 @@ func (a *app) handleBenchmarkFramework(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleDeferredWaves(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"waves":        a.waves,
 		"holdManifest": "clickup/08-deferred-waves.md",
 	})
 }
 
 func (a *app) handleV2Readiness(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
-		"status": "not_started",
+	locale := localeFromRequest(r)
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"status": msg(locale, "v2.status"),
 		"blockedBy": []string{
 			"first-wave abstraction matrix not yet executed in code",
 			"security bootstrap not yet integrated at runtime",
@@ -584,7 +624,7 @@ func (a *app) handleV2Readiness(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleTransportSummary(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"availableDemos": []map[string]any{
 			{"name": "request_response", "endpoint": "/api/comparisons/realtime", "status": "available"},
 			{"name": "polling", "endpoint": "/api/transports/polling", "status": "available"},
@@ -631,7 +671,7 @@ func (a *app) handlePollingSession(w http.ResponseWriter, r *http.Request) {
 	}
 	a.sessions.Store(session.ID, session)
 	w.Header().Set("Location", "/api/transports/polling/"+session.ID)
-	writeEnvelope(w, http.StatusCreated, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"session":   session,
 		"statusUrl": "/api/transports/polling/" + session.ID,
 	})
@@ -691,15 +731,16 @@ func (a *app) handleWebSocketDemo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleMessagingOverview(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	locale := localeFromRequest(r)
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"families": []map[string]any{
 			{"name": "job_queue", "status": "demo-available", "useFor": []string{"background work", "deferred execution"}},
 			{"name": "workflow_engine", "status": "demo-available", "useFor": []string{"multi-stage orchestration", "retry visibility"}},
 			{"name": "broker_event_bus", "status": "planned", "useFor": []string{"fan-out and durable eventing after bootstrap maturity"}},
 		},
 		"notes": []string{
-			"This slice uses an in-memory workflow run rather than a real broker.",
-			"The goal is to expose queue and stage transitions clearly through the frontend before adding distributed messaging infrastructure.",
+			msg(locale, "messaging.note.one"),
+			msg(locale, "messaging.note.two"),
 		},
 	})
 }
@@ -725,7 +766,7 @@ func (a *app) handleWorkflowCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	a.workflows.Store(run.ID, run)
 	w.Header().Set("Location", "/api/messaging/workflows/"+run.ID)
-	writeEnvelope(w, http.StatusCreated, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"workflow":  run,
 		"statusUrl": "/api/messaging/workflows/" + run.ID,
 	})
@@ -756,29 +797,31 @@ func (a *app) handleWorkflowStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleSyncOverview(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	locale := localeFromRequest(r)
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"families": []map[string]any{
 			{"name": "replication", "status": "demo-available", "useFor": []string{"leader and replica visibility", "lag illustration"}},
 			{"name": "local_first_sync", "status": "demo-available", "useFor": []string{"independent edits", "merge and conflict handling"}},
 			{"name": "coordination", "status": "demo-available", "useFor": []string{"manual replication checkpoints", "explicit conflict resolution"}},
 		},
 		"notes": []string{
-			"This slice models sync and replication in memory to keep the bootstrap honest and observable.",
-			"Replication is explicit and conflict resolution is surfaced as visible state rather than hidden machinery.",
+			msg(locale, "sync.note.one"),
+			msg(locale, "sync.note.two"),
 		},
 	})
 }
 
 func (a *app) handleProjectionOverview(w http.ResponseWriter, r *http.Request) {
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	locale := localeFromRequest(r)
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"families": []map[string]any{
 			{"name": "search_projection", "status": "demo-available", "useFor": []string{"token lookup", "summary retrieval"}},
 			{"name": "graph_projection", "status": "demo-available", "useFor": []string{"dependency traversal", "topology visibility"}},
 			{"name": "vector_projection", "status": "demo-available", "useFor": []string{"similarity ranking", "capability clustering"}},
 		},
 		"notes": []string{
-			"These demos are in-memory projections, not real Elasticsearch/Neo4j/Qdrant integrations.",
-			"The goal is to prove the projection family surface before attaching heavyweight engines later.",
+			msg(locale, "projection.note.one"),
+			msg(locale, "projection.note.two"),
 		},
 	})
 }
@@ -791,7 +834,7 @@ func (a *app) handleProjectionSearch(w http.ResponseWriter, r *http.Request) {
 			results = append(results, doc)
 		}
 	}
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"query":   query,
 		"results": results,
 		"mode":    "demo-inmemory-search",
@@ -807,7 +850,7 @@ func (a *app) handleProjectionGraph(w http.ResponseWriter, r *http.Request) {
 			edges = append(edges, map[string]string{"from": node.ID, "to": dep})
 		}
 	}
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"nodes": nodes,
 		"edges": edges,
 		"mode":  "demo-inmemory-graph",
@@ -835,7 +878,7 @@ func (a *app) handleProjectionVector(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(rankedDocs, func(i, j int) bool { return rankedDocs[i].Score > rankedDocs[j].Score })
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"query":   query,
 		"results": rankedDocs,
 		"mode":    "demo-inmemory-vector",
@@ -866,7 +909,7 @@ func (a *app) handleSyncSessionCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	a.syncRuns.Store(session.ID, session)
 	w.Header().Set("Location", "/api/sync/sessions/"+session.ID)
-	writeEnvelope(w, http.StatusCreated, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"session":   session,
 		"statusUrl": "/api/sync/sessions/" + session.ID,
 	})
@@ -959,7 +1002,7 @@ func (a *app) handleRealtimeComparisons(w http.ResponseWriter, r *http.Request) 
 		},
 	}
 
-	writeEnvelope(w, http.StatusOK, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"comparisons":        comparisons,
 		"delayAppliedMs":     650,
 		"timeoutThresholdMs": 10000,
@@ -990,7 +1033,7 @@ func (a *app) handleAsyncDemo(w http.ResponseWriter, r *http.Request) {
 	go a.runJob(context.Background(), jobID)
 
 	w.Header().Set("Location", "/api/async/demo/"+jobID)
-	writeEnvelope(w, http.StatusAccepted, map[string]any{
+	writeLocalizedEnvelope(w, r, http.StatusAccepted, map[string]any{
 		"jobId":     jobID,
 		"statusUrl": "/api/async/demo/" + jobID,
 		"state":     status,
@@ -1296,6 +1339,41 @@ func writeEnvelope(w http.ResponseWriter, status int, data any) {
 		Confidence: "medium",
 		Staleness:  "fresh",
 		MeasuredAt: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func localeFromRequest(r *http.Request) string {
+	lang := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("lang")))
+	if lang == "" {
+		lang = strings.ToLower(strings.TrimSpace(r.Header.Get("Accept-Language")))
+	}
+	if strings.HasPrefix(lang, "es") {
+		return "es"
+	}
+	return "en"
+}
+
+func msg(locale string, key string) string {
+	if catalog, ok := messages[locale]; ok {
+		if value, ok := catalog[key]; ok {
+			return value
+		}
+	}
+	if value, ok := messages["en"][key]; ok {
+		return value
+	}
+	return key
+}
+
+func writeLocalizedEnvelope(w http.ResponseWriter, r *http.Request, status int, data any) {
+	locale := localeFromRequest(r)
+	writeJSON(w, status, responseEnvelope{
+		Data:       data,
+		Source:     "bootstrap",
+		Confidence: "medium",
+		Staleness:  "fresh",
+		MeasuredAt: time.Now().UTC().Format(time.RFC3339),
+		Locale:     locale,
 	})
 }
 

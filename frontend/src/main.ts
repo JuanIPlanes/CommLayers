@@ -180,6 +180,21 @@ type ProjectionOverview = {
   notes: string[]
 }
 
+const uiMessages = {
+  en: {
+    title: 'First-wave execution console',
+    lede: 'This bootstrap turns the backend-first planning package into a runnable foundation: explicit first-wave contracts, deferred-wave holds, and visible timing behavior.',
+    localeLabel: 'Locale',
+  },
+  es: {
+    title: 'Consola de ejecucion de primera ola',
+    lede: 'Este bootstrap convierte el paquete de planificacion backend-first en una base ejecutable: contratos explicitos de primera ola, olas posteriores diferidas y comportamiento temporal visible.',
+    localeLabel: 'Idioma',
+  },
+} as const
+
+type Locale = keyof typeof uiMessages
+
 type JobState = {
   id: string
   status: string
@@ -193,6 +208,7 @@ type JobState = {
 const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api'
 const eventBase = apiBase.replace(/\/api$/, '')
 let currentSyncStatusUrl: string | null = null
+let currentLocale: Locale = 'en'
 
 const root = document.querySelector<HTMLDivElement>('#app')
 
@@ -205,11 +221,21 @@ root.innerHTML = `
     <header class="hero panel">
       <div class="hero-copy">
         <p class="eyebrow">CommLayers</p>
-        <h1>First-wave execution console</h1>
-        <p class="lede">This bootstrap turns the backend-first planning package into a runnable foundation: explicit first-wave contracts, deferred-wave holds, and visible timing behavior.</p>
+        <h1 id="hero-title">First-wave execution console</h1>
+        <p class="lede" id="hero-lede">This bootstrap turns the backend-first planning package into a runnable foundation: explicit first-wave contracts, deferred-wave holds, and visible timing behavior.</p>
       </div>
       <div class="hero-meta" id="hero-meta">Loading...</div>
     </header>
+
+    <section class="panel locale-panel">
+      <div class="body locale-body">
+        <label for="locale-select" id="locale-label">Locale</label>
+        <select id="locale-select">
+          <option value="en">English</option>
+          <option value="es">Espanol</option>
+        </select>
+      </div>
+    </section>
 
     <section class="grid overview-grid">
       <article class="panel" id="bootstrap-card"><h2>Bootstrap runtime</h2><div class="body">Loading...</div></article>
@@ -256,6 +282,11 @@ function list(items: string[], className = 'stack compact'): string {
   return `<ul class="${className}">${items.map((item) => `<li>${item}</li>`).join('')}</ul>`
 }
 
+function apiPath(path: string): string {
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}lang=${currentLocale}`
+}
+
 function badge(value: string): string {
   return `<span class="badge badge-${value.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}">${value}</span>`
 }
@@ -298,20 +329,24 @@ async function fetchEnvelope<T>(path: string): Promise<Envelope<T>> {
 }
 
 async function renderApp() {
+  const copy = uiMessages[currentLocale]
+  ;(document.querySelector('#hero-title') as HTMLHeadingElement).textContent = copy.title
+  ;(document.querySelector('#hero-lede') as HTMLParagraphElement).textContent = copy.lede
+  ;(document.querySelector('#locale-label') as HTMLLabelElement).textContent = copy.localeLabel
   const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, deferred, v2] = await Promise.all([
-    fetchEnvelope<BootstrapData>(`${apiBase}/bootstrap`),
-    fetchEnvelope<FirstWaveContract>(`${apiBase}/first-wave/contract`),
-    fetchEnvelope<SecurityBootstrap>(`${apiBase}/security/bootstrap`),
-    fetchEnvelope<DataPlatform>(`${apiBase}/data-platform`),
-    fetchEnvelope<BenchmarkFramework>(`${apiBase}/benchmark-framework`),
-    fetchEnvelope<CatalogData>(`${apiBase}/catalog`),
-    fetchEnvelope<RealtimeComparisons>(`${apiBase}/comparisons/realtime`),
-    fetchEnvelope<TransportSummary>(`${apiBase}/transports`),
-    fetchEnvelope<MessagingOverview>(`${apiBase}/messaging`),
-    fetchEnvelope<SyncOverview>(`${apiBase}/sync`),
-    fetchEnvelope<ProjectionOverview>(`${apiBase}/projections`),
-    fetchEnvelope<DeferredWavesData>(`${apiBase}/deferred-waves`),
-    fetchEnvelope<V2Readiness>(`${apiBase}/v2-readiness`),
+    fetchEnvelope<BootstrapData>(apiPath(`${apiBase}/bootstrap`)),
+    fetchEnvelope<FirstWaveContract>(apiPath(`${apiBase}/first-wave/contract`)),
+    fetchEnvelope<SecurityBootstrap>(apiPath(`${apiBase}/security/bootstrap`)),
+    fetchEnvelope<DataPlatform>(apiPath(`${apiBase}/data-platform`)),
+    fetchEnvelope<BenchmarkFramework>(apiPath(`${apiBase}/benchmark-framework`)),
+    fetchEnvelope<CatalogData>(apiPath(`${apiBase}/catalog`)),
+    fetchEnvelope<RealtimeComparisons>(apiPath(`${apiBase}/comparisons/realtime`)),
+    fetchEnvelope<TransportSummary>(apiPath(`${apiBase}/transports`)),
+    fetchEnvelope<MessagingOverview>(apiPath(`${apiBase}/messaging`)),
+    fetchEnvelope<SyncOverview>(apiPath(`${apiBase}/sync`)),
+    fetchEnvelope<ProjectionOverview>(apiPath(`${apiBase}/projections`)),
+    fetchEnvelope<DeferredWavesData>(apiPath(`${apiBase}/deferred-waves`)),
+    fetchEnvelope<V2Readiness>(apiPath(`${apiBase}/v2-readiness`)),
   ])
 
   const heroMeta = document.querySelector('#hero-meta') as HTMLDivElement
@@ -504,14 +539,14 @@ async function runPolling(mode: 'polling' | 'long-polling') {
   if (!output) return
 
   output.textContent = `Starting ${mode} session...`
-  const create = await fetch(`${apiBase}/transports/polling?mode=${mode}`, { method: 'POST' })
+  const create = await fetch(apiPath(`${apiBase}/transports/polling?mode=${mode}`), { method: 'POST' })
   const created = (await create.json()) as Envelope<{ statusUrl: string; session: { recommendedPollMs: number } }>
   const states: unknown[] = [created.data.session]
   let completed = false
 
   while (!completed) {
     const response = await fetchEnvelope<{ status: string; timeline: string[]; step: number; totalSteps: number }>(
-      `${eventBase}${created.data.statusUrl}`,
+      apiPath(`${eventBase}${created.data.statusUrl}`),
     )
     states.push(response.data)
     output.textContent = JSON.stringify(states, null, 2)
@@ -558,14 +593,14 @@ async function runWorkflowDemo() {
   if (!output) return
 
   output.textContent = 'Creating workflow run...'
-  const create = await fetch(`${apiBase}/messaging/workflows`, { method: 'POST' })
+  const create = await fetch(apiPath(`${apiBase}/messaging/workflows`), { method: 'POST' })
   const created = (await create.json()) as Envelope<{ statusUrl: string; workflow: unknown }>
   const states: unknown[] = [created.data.workflow]
   output.textContent = JSON.stringify(states, null, 2)
 
   let done = false
   while (!done) {
-    const response = await fetchEnvelope<{ status: string }>(`${eventBase}${created.data.statusUrl}`)
+    const response = await fetchEnvelope<{ status: string }>(apiPath(`${eventBase}${created.data.statusUrl}`))
     states.push(response.data)
     output.textContent = JSON.stringify(states, null, 2)
     done = response.data.status === 'completed'
@@ -583,14 +618,14 @@ async function updateSyncOutput(action: 'create' | 'mutate' | 'replicate', targe
 
   let response: Envelope<unknown>
   if (action === 'create') {
-    const created = await fetch(`${apiBase}/sync/sessions`, { method: 'POST' })
+    const created = await fetch(apiPath(`${apiBase}/sync/sessions`), { method: 'POST' })
     response = (await created.json()) as Envelope<{ statusUrl: string }>
     currentSyncStatusUrl = `${eventBase}${(response.data as { statusUrl: string }).statusUrl}`
   } else if (action == 'mutate') {
-    const mutated = await fetch(`${currentSyncStatusUrl}/mutate?target=${target}`, { method: 'POST' })
+    const mutated = await fetch(apiPath(`${currentSyncStatusUrl}/mutate?target=${target}`), { method: 'POST' })
     response = (await mutated.json()) as Envelope<unknown>
   } else {
-    const replicated = await fetch(`${currentSyncStatusUrl}/replicate`, { method: 'POST' })
+    const replicated = await fetch(apiPath(`${currentSyncStatusUrl}/replicate`), { method: 'POST' })
     response = (await replicated.json()) as Envelope<unknown>
   }
 
@@ -601,11 +636,11 @@ async function updateProjectionOutput(mode: 'search' | 'graph' | 'vector') {
   const output = document.querySelector<HTMLPreElement>('#projection-output')
   if (!output) return
 
-  let path = `${apiBase}/projections/graph`
+  let path = apiPath(`${apiBase}/projections/graph`)
   if (mode === 'search') {
-    path = `${apiBase}/projections/search?q=workflow`
+    path = apiPath(`${apiBase}/projections/search?q=workflow`)
   } else if (mode === 'vector') {
-    path = `${apiBase}/projections/vector?q=sync merge`
+    path = apiPath(`${apiBase}/projections/vector?q=sync merge`)
   }
 
   output.textContent = 'Loading projection...'
@@ -723,6 +758,16 @@ function wireSyncDemo() {
   replicateButton.addEventListener('click', () => updateSyncOutput('replicate'))
 }
 
+function wireLocaleSwitcher() {
+  const select = document.querySelector<HTMLSelectElement>('#locale-select')
+  if (!select) return
+  select.value = currentLocale
+  select.addEventListener('change', async () => {
+    currentLocale = select.value as Locale
+    await renderApp()
+  })
+}
+
 function wireProjectionDemo() {
   const searchButton = document.querySelector<HTMLButtonElement>('#run-search')
   const graphButton = document.querySelector<HTMLButtonElement>('#run-graph')
@@ -744,3 +789,4 @@ wireTransportDemos()
 wireWorkflowDemo()
 wireSyncDemo()
 wireProjectionDemo()
+wireLocaleSwitcher()
