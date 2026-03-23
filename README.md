@@ -15,19 +15,28 @@ This is a foundation snapshot, not the full planned platform.
 Implemented in this first working version:
 - backend-first project skeleton
 - Go API with:
-  - `/healthz`
-  - `/api/bootstrap`
-  - `/api/catalog`
-  - `/api/comparisons/realtime`
-  - `/api/first-wave`
-  - `/api/async/demo`
-  - `/api/events` (SSE demo)
+- `/healthz`
+- `/api/bootstrap`
+- `/api/streams`
+- `/api/catalog`
+- `/api/first-wave/contract`
+- `/api/first-wave/streams/:id`
+- `/api/security/bootstrap`
+- `/api/data-platform`
+- `/api/benchmark-framework`
+- `/api/deferred-waves`
+- `/api/v2-readiness`
+- `/api/comparisons/realtime`
+- `/api/async/demo`
+- `/api/events` (SSE demo)
 - TypeScript frontend with:
-  - bootstrap summary
-  - first-wave stream view
-  - catalog snapshot
-  - SSE event feed
-  - async demo runner
+- first-wave execution console
+- stream contract cards
+- security, data, and benchmark panels
+- deferred-wave and v2 readiness panels
+- catalog snapshot and realtime guidance
+- SSE event feed
+- async demo runner
 - Compose-based runtime with PostgreSQL and Redis active by default
 - Optional backend profiles for Elasticsearch, Neo4j, Qdrant, and MongoDB
 
@@ -84,6 +93,23 @@ Active first-wave streams:
 4. `86agbv0k9` - benchmark and observability framework
 
 Deferred waves remain staged in `clickup/08-deferred-waves.md`.
+
+## Validation Snapshot
+
+The current bootstrap version was validated locally with:
+
+```bash
+cd services/api && go build ./...
+cd ../../frontend && npm run build
+cd .. && docker compose -f docker-compose.back.yml config
+docker compose -f docker-compose.front.yml config
+```
+
+Validation result at the current stage:
+- Go API build passed
+- frontend production build passed
+- backend compose config passed
+- frontend compose config passed
 
 ## Notes
 
