@@ -4,7 +4,6 @@ services:
   frontend:
     build:
       context: ./frontend
-    container_name: commlayers-frontend
     ports:
       - "4173:80"
     networks:
