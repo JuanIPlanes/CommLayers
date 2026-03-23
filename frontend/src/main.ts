@@ -162,6 +162,15 @@ type MessagingOverview = {
   notes: string[]
 }
 
+type SyncOverview = {
+  families: Array<{
+    name: string
+    status: string
+    useFor: string[]
+  }>
+  notes: string[]
+}
+
 type JobState = {
   id: string
   status: string
@@ -174,6 +183,7 @@ type JobState = {
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api'
 const eventBase = apiBase.replace(/\/api$/, '')
+let currentSyncStatusUrl: string | null = null
 
 const root = document.querySelector<HTMLDivElement>('#app')
 
@@ -213,6 +223,7 @@ root.innerHTML = `
       <article class="panel" id="realtime-card"><h2>Realtime guidance</h2><div class="body">Loading...</div></article>
       <article class="panel" id="transport-card"><h2>Transport demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="workflow-card"><h2>Messaging and workflow demos</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="sync-card"><h2>Sync and replication demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -277,7 +288,7 @@ async function fetchEnvelope<T>(path: string): Promise<Envelope<T>> {
 }
 
 async function renderApp() {
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, deferred, v2] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, deferred, v2] = await Promise.all([
     fetchEnvelope<BootstrapData>(`${apiBase}/bootstrap`),
     fetchEnvelope<FirstWaveContract>(`${apiBase}/first-wave/contract`),
     fetchEnvelope<SecurityBootstrap>(`${apiBase}/security/bootstrap`),
@@ -287,6 +298,7 @@ async function renderApp() {
     fetchEnvelope<RealtimeComparisons>(`${apiBase}/comparisons/realtime`),
     fetchEnvelope<TransportSummary>(`${apiBase}/transports`),
     fetchEnvelope<MessagingOverview>(`${apiBase}/messaging`),
+    fetchEnvelope<SyncOverview>(`${apiBase}/sync`),
     fetchEnvelope<DeferredWavesData>(`${apiBase}/deferred-waves`),
     fetchEnvelope<V2Readiness>(`${apiBase}/v2-readiness`),
   ])
@@ -427,6 +439,22 @@ async function renderApp() {
     <pre id="workflow-output">Idle</pre>
   `
 
+  const syncCard = document.querySelector('#sync-card .body') as HTMLDivElement
+  syncCard.innerHTML = `
+    <p>Model primary/replica drift and explicit replication before adding heavier distributed machinery.</p>
+    <div class="mini-section"><h4>Families</h4>${list(
+      sync.data.families.map((family) => `${family.name} (${family.status}) -> ${family.useFor.join(', ')}`),
+    )}</div>
+    <div class="mini-section"><h4>Notes</h4>${list(sync.data.notes)}</div>
+    <div class="button-row">
+      <button id="create-sync" class="button">Create sync session</button>
+      <button id="mutate-primary" class="button">Mutate primary</button>
+      <button id="mutate-replica" class="button">Mutate replica</button>
+      <button id="replicate-sync" class="button">Replicate</button>
+    </div>
+    <pre id="sync-output">Idle</pre>
+  `
+
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement
   deferredCard.innerHTML = `
     <p><strong>Hold manifest:</strong> ${deferred.data.holdManifest}</p>
@@ -516,6 +544,31 @@ async function runWorkflowDemo() {
     output.textContent = JSON.stringify(states, null, 2)
     done = response.data.status === 'completed'
   }
+}
+
+async function updateSyncOutput(action: 'create' | 'mutate' | 'replicate', target?: 'primary' | 'replica') {
+  const output = document.querySelector<HTMLPreElement>('#sync-output')
+  if (!output) return
+
+  if (action !== 'create' && !currentSyncStatusUrl) {
+    output.textContent = 'Create a sync session first.'
+    return
+  }
+
+  let response: Envelope<unknown>
+  if (action === 'create') {
+    const created = await fetch(`${apiBase}/sync/sessions`, { method: 'POST' })
+    response = (await created.json()) as Envelope<{ statusUrl: string }>
+    currentSyncStatusUrl = `${eventBase}${(response.data as { statusUrl: string }).statusUrl}`
+  } else if (action == 'mutate') {
+    const mutated = await fetch(`${currentSyncStatusUrl}/mutate?target=${target}`, { method: 'POST' })
+    response = (await mutated.json()) as Envelope<unknown>
+  } else {
+    const replicated = await fetch(`${currentSyncStatusUrl}/replicate`, { method: 'POST' })
+    response = (await replicated.json()) as Envelope<unknown>
+  }
+
+  output.textContent = JSON.stringify(response.data, null, 2)
 }
 
 function startEvents() {
@@ -615,6 +668,19 @@ function wireWorkflowDemo() {
   })
 }
 
+function wireSyncDemo() {
+  const createButton = document.querySelector<HTMLButtonElement>('#create-sync')
+  const mutatePrimaryButton = document.querySelector<HTMLButtonElement>('#mutate-primary')
+  const mutateReplicaButton = document.querySelector<HTMLButtonElement>('#mutate-replica')
+  const replicateButton = document.querySelector<HTMLButtonElement>('#replicate-sync')
+  if (!createButton || !mutatePrimaryButton || !mutateReplicaButton || !replicateButton) return
+
+  createButton.addEventListener('click', () => updateSyncOutput('create'))
+  mutatePrimaryButton.addEventListener('click', () => updateSyncOutput('mutate', 'primary'))
+  mutateReplicaButton.addEventListener('click', () => updateSyncOutput('mutate', 'replica'))
+  replicateButton.addEventListener('click', () => updateSyncOutput('replicate'))
+}
+
 renderApp().catch((error) => {
   root.innerHTML = `<main class="shell"><section class="panel"><h1>Bootstrap failed</h1><pre>${error instanceof Error ? error.message : 'Unknown error'}</pre></section></main>`
 })
@@ -623,3 +689,4 @@ startEvents()
 wireAsyncDemo()
 wireTransportDemos()
 wireWorkflowDemo()
+wireSyncDemo()

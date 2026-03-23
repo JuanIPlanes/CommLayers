@@ -20,6 +20,7 @@ type app struct {
 	jobs      sync.Map
 	sessions  sync.Map
 	workflows sync.Map
+	syncRuns  sync.Map
 	streams   []stream
 	families  []family
 	waves     []deferredWave
@@ -109,6 +110,21 @@ type workflowRun struct {
 	UpdatedAt      string   `json:"updatedAt"`
 }
 
+type syncSession struct {
+	ID              string   `json:"id"`
+	Status          string   `json:"status"`
+	PrimaryValue    string   `json:"primaryValue"`
+	ReplicaValue    string   `json:"replicaValue"`
+	PrimaryVersion  int      `json:"primaryVersion"`
+	ReplicaVersion  int      `json:"replicaVersion"`
+	Conflict        bool     `json:"conflict"`
+	Lag             int      `json:"lag"`
+	LastReplication string   `json:"lastReplication"`
+	Timeline        []string `json:"timeline"`
+	CreatedAt       string   `json:"createdAt"`
+	UpdatedAt       string   `json:"updatedAt"`
+}
+
 func main() {
 	application := newApp()
 
@@ -131,6 +147,9 @@ func main() {
 	mux.HandleFunc("/api/messaging", application.handleMessagingOverview)
 	mux.HandleFunc("/api/messaging/workflows", application.handleWorkflowCreate)
 	mux.HandleFunc("/api/messaging/workflows/", application.handleWorkflowStatus)
+	mux.HandleFunc("/api/sync", application.handleSyncOverview)
+	mux.HandleFunc("/api/sync/sessions", application.handleSyncSessionCreate)
+	mux.HandleFunc("/api/sync/sessions/", application.handleSyncSessionAction)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -689,6 +708,109 @@ func (a *app) handleWorkflowStatus(w http.ResponseWriter, r *http.Request) {
 	writeEnvelope(w, http.StatusOK, run)
 }
 
+func (a *app) handleSyncOverview(w http.ResponseWriter, r *http.Request) {
+	writeEnvelope(w, http.StatusOK, map[string]any{
+		"families": []map[string]any{
+			{"name": "replication", "status": "demo-available", "useFor": []string{"leader and replica visibility", "lag illustration"}},
+			{"name": "local_first_sync", "status": "demo-available", "useFor": []string{"independent edits", "merge and conflict handling"}},
+			{"name": "coordination", "status": "demo-available", "useFor": []string{"manual replication checkpoints", "explicit conflict resolution"}},
+		},
+		"notes": []string{
+			"This slice models sync and replication in memory to keep the bootstrap honest and observable.",
+			"Replication is explicit and conflict resolution is surfaced as visible state rather than hidden machinery.",
+		},
+	})
+}
+
+func (a *app) handleSyncSessionCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	session := syncSession{
+		ID:              fmt.Sprintf("sync-%d", time.Now().UnixNano()),
+		Status:          "aligned",
+		PrimaryValue:    "seed-primary",
+		ReplicaValue:    "seed-primary",
+		PrimaryVersion:  1,
+		ReplicaVersion:  1,
+		Conflict:        false,
+		Lag:             0,
+		LastReplication: now,
+		Timeline:        []string{"session_created", "replica_aligned"},
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	a.syncRuns.Store(session.ID, session)
+	w.Header().Set("Location", "/api/sync/sessions/"+session.ID)
+	writeEnvelope(w, http.StatusCreated, map[string]any{
+		"session":   session,
+		"statusUrl": "/api/sync/sessions/" + session.ID,
+	})
+}
+
+func (a *app) handleSyncSessionAction(w http.ResponseWriter, r *http.Request) {
+	idAndAction := strings.TrimPrefix(r.URL.Path, "/api/sync/sessions/")
+	if idAndAction == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_sync_session"})
+		return
+	}
+
+	parts := strings.Split(strings.Trim(idAndAction, "/"), "/")
+	id := parts[0]
+	action := "status"
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+
+	raw, ok := a.syncRuns.Load(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "sync_session_not_found"})
+		return
+	}
+
+	session := raw.(syncSession)
+	switch action {
+	case "status":
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+			return
+		}
+	case "mutate":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+			return
+		}
+		target := r.URL.Query().Get("target")
+		if target == "" {
+			target = "primary"
+		}
+		value := r.URL.Query().Get("value")
+		if value == "" {
+			value = fmt.Sprintf("%s-edit-%d", target, time.Now().Unix()%1000)
+		}
+		session = mutateSyncSession(session, target, value)
+	case "replicate":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+			return
+		}
+		session = replicateSyncSession(session)
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unsupported_sync_action"})
+		return
+	}
+
+	a.syncRuns.Store(id, session)
+	writeEnvelope(w, http.StatusOK, session)
+}
+
 func (a *app) handleRealtimeComparisons(w http.ResponseWriter, r *http.Request) {
 	comparisons := []comparison{
 		{
@@ -900,6 +1022,63 @@ func nextWorkflowState(run workflowRun) workflowRun {
 	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	run.Timeline = append(run.Timeline, step.stage)
 	return run
+}
+
+func mutateSyncSession(session syncSession, target string, value string) syncSession {
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if target == "replica" {
+		session.ReplicaValue = value
+		session.ReplicaVersion++
+		session.Timeline = append(session.Timeline, "replica_mutated")
+	} else {
+		session.PrimaryValue = value
+		session.PrimaryVersion++
+		session.Timeline = append(session.Timeline, "primary_mutated")
+	}
+	session.Lag = abs(session.PrimaryVersion - session.ReplicaVersion)
+	session.Conflict = session.PrimaryValue != session.ReplicaValue
+	if session.Conflict {
+		session.Status = "conflict"
+	} else if session.Lag > 0 {
+		session.Status = "replicating"
+	} else {
+		session.Status = "aligned"
+	}
+	return session
+}
+
+func replicateSyncSession(session syncSession) syncSession {
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	session.LastReplication = session.UpdatedAt
+	if session.PrimaryValue != session.ReplicaValue {
+		if session.PrimaryVersion == session.ReplicaVersion {
+			merged := session.PrimaryValue + " | " + session.ReplicaValue
+			session.PrimaryValue = merged
+			session.ReplicaValue = merged
+			session.PrimaryVersion++
+			session.ReplicaVersion = session.PrimaryVersion
+			session.Timeline = append(session.Timeline, "conflict_merged")
+		} else if session.PrimaryVersion > session.ReplicaVersion {
+			session.ReplicaValue = session.PrimaryValue
+			session.ReplicaVersion = session.PrimaryVersion
+			session.Timeline = append(session.Timeline, "replica_caught_up")
+		} else {
+			session.PrimaryValue = session.ReplicaValue
+			session.PrimaryVersion = session.ReplicaVersion
+			session.Timeline = append(session.Timeline, "primary_caught_up")
+		}
+	}
+	session.Conflict = false
+	session.Lag = 0
+	session.Status = "aligned"
+	return session
+}
+
+func abs(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func recommendedDelay(mode string) int {
