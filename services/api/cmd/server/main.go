@@ -11,11 +11,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type app struct {
 	startedAt time.Time
 	jobs      sync.Map
+	sessions  sync.Map
 	streams   []stream
 	families  []family
 	waves     []deferredWave
@@ -80,6 +83,19 @@ type comparison struct {
 	Notes           []string `json:"notes"`
 }
 
+type transportSession struct {
+	ID                string   `json:"id"`
+	Mode              string   `json:"mode"`
+	Status            string   `json:"status"`
+	Step              int      `json:"step"`
+	TotalSteps        int      `json:"totalSteps"`
+	RecommendedPollMS int      `json:"recommendedPollMs"`
+	DelayAppliedMS    int      `json:"delayAppliedMs"`
+	Timeline          []string `json:"timeline"`
+	CreatedAt         string   `json:"createdAt"`
+	UpdatedAt         string   `json:"updatedAt"`
+}
+
 func main() {
 	application := newApp()
 
@@ -96,9 +112,13 @@ func main() {
 	mux.HandleFunc("/api/deferred-waves", application.handleDeferredWaves)
 	mux.HandleFunc("/api/v2-readiness", application.handleV2Readiness)
 	mux.HandleFunc("/api/comparisons/realtime", application.handleRealtimeComparisons)
+	mux.HandleFunc("/api/transports", application.handleTransportSummary)
+	mux.HandleFunc("/api/transports/polling", application.handlePollingSession)
+	mux.HandleFunc("/api/transports/polling/", application.handlePollingStatus)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
+	mux.HandleFunc("/api/ws/demo", application.handleWebSocketDemo)
 
 	handler := withCORS(withLogging(mux))
 	server := &http.Server{
@@ -481,6 +501,113 @@ func (a *app) handleV2Readiness(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *app) handleTransportSummary(w http.ResponseWriter, r *http.Request) {
+	writeEnvelope(w, http.StatusOK, map[string]any{
+		"availableDemos": []map[string]any{
+			{"name": "request_response", "endpoint": "/api/comparisons/realtime", "status": "available"},
+			{"name": "polling", "endpoint": "/api/transports/polling", "status": "available"},
+			{"name": "long_polling", "endpoint": "/api/transports/polling?mode=long-polling", "status": "available"},
+			{"name": "server_sent_events", "endpoint": "/api/events", "status": "available"},
+			{"name": "websocket", "endpoint": "/api/ws/demo", "status": "available"},
+		},
+		"notes": []string{
+			"Polling returns immediately and advances state per fetch.",
+			"Long-polling intentionally waits before returning the next state transition.",
+			"SSE and WebSocket are both reachable through the frontend gateway.",
+		},
+	})
+}
+
+func (a *app) handlePollingSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "polling"
+	}
+	if mode != "polling" && mode != "long-polling" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported_mode"})
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	session := transportSession{
+		ID:                fmt.Sprintf("transport-%d", time.Now().UnixNano()),
+		Mode:              mode,
+		Status:            "running",
+		Step:              0,
+		TotalSteps:        4,
+		RecommendedPollMS: recommendedDelay(mode),
+		DelayAppliedMS:    recommendedDelay(mode),
+		Timeline:          []string{"session_created"},
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	a.sessions.Store(session.ID, session)
+	w.Header().Set("Location", "/api/transports/polling/"+session.ID)
+	writeEnvelope(w, http.StatusCreated, map[string]any{
+		"session":   session,
+		"statusUrl": "/api/transports/polling/" + session.ID,
+	})
+}
+
+func (a *app) handlePollingStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/transports/polling/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_session_id"})
+		return
+	}
+
+	raw, ok := a.sessions.Load(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "transport_session_not_found"})
+		return
+	}
+
+	session := raw.(transportSession)
+	if session.Mode == "long-polling" && session.Status != "completed" {
+		time.Sleep(time.Duration(session.RecommendedPollMS) * time.Millisecond)
+	}
+
+	session = nextTransportSessionState(session)
+	a.sessions.Store(id, session)
+	writeEnvelope(w, http.StatusOK, session)
+}
+
+func (a *app) handleWebSocketDemo(w http.ResponseWriter, r *http.Request) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "websocket_upgrade_failed"})
+		return
+	}
+	defer conn.Close()
+
+	steps := []map[string]any{
+		{"transport": "websocket", "step": "connected", "delayAppliedMs": 200},
+		{"transport": "websocket", "step": "duplex_channel_ready", "delayAppliedMs": 700},
+		{"transport": "websocket", "step": "message_exchange_simulated", "delayAppliedMs": 1200},
+		{"transport": "websocket", "step": "completed", "delayAppliedMs": 1600},
+	}
+
+	for _, step := range steps {
+		if err := conn.WriteJSON(step); err != nil {
+			return
+		}
+		time.Sleep(1200 * time.Millisecond)
+	}
+}
+
 func (a *app) handleRealtimeComparisons(w http.ResponseWriter, r *http.Request) {
 	comparisons := []comparison{
 		{
@@ -622,6 +749,48 @@ func (a *app) runJob(ctx context.Context, jobID string) {
 		state.Timeline = append(state.Timeline, step.step)
 		a.jobs.Store(jobID, state)
 	}
+}
+
+func nextTransportSessionState(session transportSession) transportSession {
+	steps := []struct {
+		name     string
+		progress int
+	}{
+		{name: "request_sent", progress: 25},
+		{name: "server_processing", progress: 50},
+		{name: "response_ready", progress: 80},
+		{name: "completed", progress: 100},
+	}
+
+	if session.Status == "completed" {
+		return session
+	}
+
+	index := session.Step
+	if index >= len(steps) {
+		session.Status = "completed"
+		session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		return session
+	}
+
+	step := steps[index]
+	session.Step++
+	session.Status = "running"
+	if step.name == "completed" {
+		session.Status = "completed"
+	}
+	session.DelayAppliedMS = recommendedDelay(session.Mode)
+	session.RecommendedPollMS = recommendedDelay(session.Mode)
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	session.Timeline = append(session.Timeline, step.name)
+	return session
+}
+
+func recommendedDelay(mode string) int {
+	if mode == "long-polling" {
+		return 1400
+	}
+	return 700
 }
 
 func filterStreams(streams []stream, keep func(stream) bool) []stream {

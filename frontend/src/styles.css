@@ -210,6 +210,13 @@ a {
   cursor: pointer;
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
 .button:disabled {
   opacity: 0.6;
   cursor: wait;

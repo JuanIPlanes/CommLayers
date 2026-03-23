@@ -144,6 +144,15 @@ type RealtimeComparisons = {
   timeoutThresholdMs: number
 }
 
+type TransportSummary = {
+  availableDemos: Array<{
+    name: string
+    endpoint: string
+    status: string
+  }>
+  notes: string[]
+}
+
 type JobState = {
   id: string
   status: string
@@ -193,6 +202,7 @@ root.innerHTML = `
     <section class="grid demo-grid">
       <article class="panel" id="catalog-card"><h2>Catalog snapshot</h2><div class="body">Loading...</div></article>
       <article class="panel" id="realtime-card"><h2>Realtime guidance</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="transport-card"><h2>Transport demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -257,7 +267,7 @@ async function fetchEnvelope<T>(path: string): Promise<Envelope<T>> {
 }
 
 async function renderApp() {
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, deferred, v2] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, deferred, v2] = await Promise.all([
     fetchEnvelope<BootstrapData>(`${apiBase}/bootstrap`),
     fetchEnvelope<FirstWaveContract>(`${apiBase}/first-wave/contract`),
     fetchEnvelope<SecurityBootstrap>(`${apiBase}/security/bootstrap`),
@@ -265,6 +275,7 @@ async function renderApp() {
     fetchEnvelope<BenchmarkFramework>(`${apiBase}/benchmark-framework`),
     fetchEnvelope<CatalogData>(`${apiBase}/catalog`),
     fetchEnvelope<RealtimeComparisons>(`${apiBase}/comparisons/realtime`),
+    fetchEnvelope<TransportSummary>(`${apiBase}/transports`),
     fetchEnvelope<DeferredWavesData>(`${apiBase}/deferred-waves`),
     fetchEnvelope<V2Readiness>(`${apiBase}/v2-readiness`),
   ])
@@ -377,6 +388,21 @@ async function renderApp() {
       .join('')}</ul>
   `
 
+  const transportCard = document.querySelector('#transport-card .body') as HTMLDivElement
+  transportCard.innerHTML = `
+    <p>Exercise the newly available transport demos through the frontend gateway.</p>
+    <div class="mini-section"><h4>Available demos</h4>${list(
+      transports.data.availableDemos.map((item) => `${item.name} -> ${item.endpoint} (${item.status})`),
+    )}</div>
+    <div class="mini-section"><h4>Notes</h4>${list(transports.data.notes)}</div>
+    <div class="button-row">
+      <button id="run-polling" class="button">Run polling demo</button>
+      <button id="run-long-polling" class="button">Run long-polling demo</button>
+      <button id="run-websocket" class="button">Run WebSocket demo</button>
+    </div>
+    <pre id="transport-output">Idle</pre>
+  `
+
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement
   deferredCard.innerHTML = `
     <p><strong>Hold manifest:</strong> ${deferred.data.holdManifest}</p>
@@ -393,6 +419,60 @@ async function renderApp() {
     <div class="mini-section"><h4>Blocked by</h4>${list(v2.data.blockedBy)}</div>
     <div class="mini-section"><h4>Unlock path</h4>${list(v2.data.unlockPath)}</div>
   `
+}
+
+async function runPolling(mode: 'polling' | 'long-polling') {
+  const output = document.querySelector<HTMLPreElement>('#transport-output')
+  if (!output) return
+
+  output.textContent = `Starting ${mode} session...`
+  const create = await fetch(`${apiBase}/transports/polling?mode=${mode}`, { method: 'POST' })
+  const created = (await create.json()) as Envelope<{ statusUrl: string; session: { recommendedPollMs: number } }>
+  const states: unknown[] = [created.data.session]
+  let completed = false
+
+  while (!completed) {
+    const response = await fetchEnvelope<{ status: string; timeline: string[]; step: number; totalSteps: number }>(
+      `${eventBase}${created.data.statusUrl}`,
+    )
+    states.push(response.data)
+    output.textContent = JSON.stringify(states, null, 2)
+    completed = response.data.status === 'completed'
+    if (!completed && mode === 'polling') {
+      await new Promise((resolve) => window.setTimeout(resolve, created.data.session.recommendedPollMs))
+    }
+  }
+}
+
+function runWebSocketDemo() {
+  const output = document.querySelector<HTMLPreElement>('#transport-output')
+  const button = document.querySelector<HTMLButtonElement>('#run-websocket')
+  if (!output || !button) return
+
+  button.disabled = true
+  output.textContent = 'Opening WebSocket...'
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const socket = new WebSocket(`${protocol}//${window.location.host}/api/ws/demo`)
+  const messages: unknown[] = []
+
+  socket.onmessage = (event) => {
+    try {
+      messages.push(JSON.parse(event.data) as unknown)
+    } catch {
+      messages.push(event.data)
+    }
+    output.textContent = JSON.stringify(messages, null, 2)
+  }
+
+  socket.onerror = () => {
+    output.textContent = 'WebSocket error'
+    button.disabled = false
+  }
+
+  socket.onclose = () => {
+    button.disabled = false
+  }
 }
 
 function startEvents() {
@@ -451,9 +531,37 @@ function wireAsyncDemo() {
   })
 }
 
+function wireTransportDemos() {
+  const pollingButton = document.querySelector<HTMLButtonElement>('#run-polling')
+  const longPollingButton = document.querySelector<HTMLButtonElement>('#run-long-polling')
+  const websocketButton = document.querySelector<HTMLButtonElement>('#run-websocket')
+  if (!pollingButton || !longPollingButton || !websocketButton) return
+
+  pollingButton.addEventListener('click', async () => {
+    pollingButton.disabled = true
+    try {
+      await runPolling('polling')
+    } finally {
+      pollingButton.disabled = false
+    }
+  })
+
+  longPollingButton.addEventListener('click', async () => {
+    longPollingButton.disabled = true
+    try {
+      await runPolling('long-polling')
+    } finally {
+      longPollingButton.disabled = false
+    }
+  })
+
+  websocketButton.addEventListener('click', runWebSocketDemo)
+}
+
 renderApp().catch((error) => {
   root.innerHTML = `<main class="shell"><section class="panel"><h1>Bootstrap failed</h1><pre>${error instanceof Error ? error.message : 'Unknown error'}</pre></section></main>`
 })
 
 startEvents()
 wireAsyncDemo()
+wireTransportDemos()
