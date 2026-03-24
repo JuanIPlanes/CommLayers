@@ -249,6 +249,7 @@ func main() {
 	mux.HandleFunc("/api/v2/paradigms/event-driven", application.handleV2EventDriven)
 	mux.HandleFunc("/api/v2/paradigms/reactive-stream-driven", application.handleV2ReactiveStreamDriven)
 	mux.HandleFunc("/api/v2/paradigms/local-first-crdt", application.handleV2LocalFirstCRDT)
+	mux.HandleFunc("/api/v2/paradigms/consensus-driven", application.handleV2ConsensusDriven)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -869,6 +870,42 @@ func (a *app) handleV2LocalFirstCRDT(w http.ResponseWriter, r *http.Request) {
 		"notes": []string{
 			"This slice is local-first and CRDT-oriented, not a full CRDT engine yet.",
 			"It reuses persisted sync sessions to make offline-ish divergence and merge semantics visible.",
+		},
+	})
+}
+
+func (a *app) handleV2ConsensusDriven(w http.ResponseWriter, r *http.Request) {
+	var sessions []syncSession
+	if err := a.store.ListByKind(r.Context(), "sync_session", 12, &sessions); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load_sync_sessions_failed"})
+		return
+	}
+	quorumReady := 0
+	quorumBlocked := 0
+	for _, session := range sessions {
+		if session.Conflict || session.Lag > 0 {
+			quorumBlocked++
+		} else {
+			quorumReady++
+		}
+	}
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"paradigm": "consensus_driven",
+		"status":   "active",
+		"coordinationSignals": map[string]any{
+			"candidateSessions": len(sessions),
+			"quorumReady":       quorumReady,
+			"quorumBlocked":     quorumBlocked,
+			"rule":              "aligned sessions count as ready, divergent sessions count as blocked",
+		},
+		"decisionRules": []string{
+			"A session with zero lag and no conflict is treated as quorum-ready in the bootstrap model.",
+			"Any divergence blocks consensus until replication or merge resolves the difference.",
+			"The event stream supplies the change history; sync sessions supply the current coordination view.",
+		},
+		"notes": []string{
+			"This slice is consensus-driven in orientation, not a full Raft/Paxos implementation.",
+			"It makes agreement and blocking conditions visible using the current persisted sync and event signals.",
 		},
 	})
 }
