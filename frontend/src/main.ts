@@ -266,6 +266,17 @@ type ConsensusDriven = {
   notes: string[]
 }
 
+type PlanetScaleComposite = {
+  paradigm: string
+  status: string
+  buildingBlocks: Array<{
+    name: string
+    role: string
+  }>
+  compositionRules: string[]
+  notes: string[]
+}
+
 const uiMessages = {
   en: {
     title: 'First-wave execution console',
@@ -352,6 +363,7 @@ root.innerHTML = `
       <article class="panel" id="v2-reactive-card"><h2>V2 reactive stream slice</h2><div class="body">Loading...</div></article>
       <article class="panel" id="v2-localfirst-card"><h2>V2 local-first / CRDT slice</h2><div class="body">Loading...</div></article>
       <article class="panel" id="v2-consensus-card"><h2>V2 consensus-driven slice</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="v2-planet-card"><h2>V2 planet-scale composite slice</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -425,7 +437,7 @@ async function renderApp() {
   ;(document.querySelector('#hero-title') as HTMLHeadingElement).textContent = copy.title
   ;(document.querySelector('#hero-lede') as HTMLParagraphElement).textContent = copy.lede
   ;(document.querySelector('#locale-label') as HTMLLabelElement).textContent = copy.localeLabel
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap, v2Event, v2Reactive, v2LocalFirst, v2Consensus] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap, v2Event, v2Reactive, v2LocalFirst, v2Consensus, v2Planet] = await Promise.all([
     fetchEnvelope<BootstrapData>(apiPath(`${apiBase}/bootstrap`)),
     fetchEnvelope<FirstWaveContract>(apiPath(`${apiBase}/first-wave/contract`)),
     fetchEnvelope<SecurityBootstrap>(apiPath(`${apiBase}/security/bootstrap`)),
@@ -445,6 +457,7 @@ async function renderApp() {
     fetchEnvelope<ReactiveStreamDriven>(apiPath(`${apiBase}/v2/paradigms/reactive-stream-driven`)),
     fetchEnvelope<LocalFirstCRDT>(apiPath(`${apiBase}/v2/paradigms/local-first-crdt`)),
     fetchEnvelope<ConsensusDriven>(apiPath(`${apiBase}/v2/paradigms/consensus-driven`)),
+    fetchEnvelope<PlanetScaleComposite>(apiPath(`${apiBase}/v2/paradigms/planet-scale-composite`)),
   ])
 
   const heroMeta = document.querySelector('#hero-meta') as HTMLDivElement
@@ -686,6 +699,16 @@ async function renderApp() {
     ])}</div>
     <div class="mini-section"><h4>Decision rules</h4>${list(v2Consensus.data.decisionRules)}</div>
     <div class="mini-section"><h4>Notes</h4>${list(v2Consensus.data.notes)}</div>
+  `
+
+  const v2PlanetCard = document.querySelector('#v2-planet-card .body') as HTMLDivElement
+  v2PlanetCard.innerHTML = `
+    <p><strong>Paradigm:</strong> ${v2Planet.data.paradigm} (${v2Planet.data.status})</p>
+    <div class="mini-section"><h4>Building blocks</h4>${list(
+      v2Planet.data.buildingBlocks.map((block) => `${block.name} -> ${block.role}`),
+    )}</div>
+    <div class="mini-section"><h4>Composition rules</h4>${list(v2Planet.data.compositionRules)}</div>
+    <div class="mini-section"><h4>Notes</h4>${list(v2Planet.data.notes)}</div>
   `
 
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement

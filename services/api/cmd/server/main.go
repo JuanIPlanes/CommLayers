@@ -250,6 +250,7 @@ func main() {
 	mux.HandleFunc("/api/v2/paradigms/reactive-stream-driven", application.handleV2ReactiveStreamDriven)
 	mux.HandleFunc("/api/v2/paradigms/local-first-crdt", application.handleV2LocalFirstCRDT)
 	mux.HandleFunc("/api/v2/paradigms/consensus-driven", application.handleV2ConsensusDriven)
+	mux.HandleFunc("/api/v2/paradigms/planet-scale-composite", application.handleV2PlanetScaleComposite)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -906,6 +907,29 @@ func (a *app) handleV2ConsensusDriven(w http.ResponseWriter, r *http.Request) {
 		"notes": []string{
 			"This slice is consensus-driven in orientation, not a full Raft/Paxos implementation.",
 			"It makes agreement and blocking conditions visible using the current persisted sync and event signals.",
+		},
+	})
+}
+
+func (a *app) handleV2PlanetScaleComposite(w http.ResponseWriter, r *http.Request) {
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"paradigm": "planet_scale_composite_architectures",
+		"status":   "active",
+		"buildingBlocks": []map[string]any{
+			{"name": "event_driven_architecture", "role": "durable event backbone"},
+			{"name": "reactive_stream_driven", "role": "stream signal and pressure view"},
+			{"name": "local_first_crdt", "role": "divergence and merge semantics"},
+			{"name": "consensus_driven", "role": "agreement and blocked coordination signals"},
+		},
+		"compositionRules": []string{
+			"Persisted events become the shared history across slices.",
+			"Redis-backed transient flow remains the fast path for live updates.",
+			"Sync and consensus signals indicate whether composite state is converging cleanly.",
+			"Projection and pricing surfaces remain downstream consumers of the composite runtime.",
+		},
+		"notes": []string{
+			"This slice does not claim true planet-scale deployment yet.",
+			"It is the compositional v2 view that explains how multiple paradigms combine on the current runtime foundation.",
 		},
 	})
 }
