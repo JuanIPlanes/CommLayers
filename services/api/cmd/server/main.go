@@ -204,6 +204,14 @@ type pricePoint struct {
 	Fallback   bool    `json:"fallback"`
 }
 
+type eventRecord struct {
+	ID        string         `json:"id"`
+	Kind      string         `json:"kind"`
+	Payload   map[string]any `json:"payload"`
+	EmittedAt string         `json:"emittedAt"`
+	Source    string         `json:"source"`
+}
+
 func main() {
 	application, err := newApp()
 	if err != nil {
@@ -238,6 +246,7 @@ func main() {
 	mux.HandleFunc("/api/projections/vector", application.handleProjectionVector)
 	mux.HandleFunc("/api/pricing", application.handlePricingOverview)
 	mux.HandleFunc("/api/v2/roadmap", application.handleV2Roadmap)
+	mux.HandleFunc("/api/v2/paradigms/event-driven", application.handleV2EventDriven)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -514,14 +523,24 @@ func (a *app) loadRecord(ctx context.Context, kind string, id string, dst any) (
 }
 
 func (a *app) emitTransientEvent(ctx context.Context, kind string, payload map[string]any) {
+	entry := eventRecord{
+		ID:        fmt.Sprintf("evt-%d", time.Now().UnixNano()),
+		Kind:      kind,
+		Payload:   payload,
+		EmittedAt: time.Now().UTC().Format(time.RFC3339),
+		Source:    "redis-pubsub",
+	}
+	if err := a.saveRecord(ctx, "domain_event", entry.ID, entry); err != nil {
+		log.Printf("persist event failed kind=%s err=%v", kind, err)
+	}
 	if a.cache == nil || !a.cache.Enabled() {
 		return
 	}
 	envelope := map[string]any{
 		"kind":       kind,
 		"payload":    payload,
-		"emittedAt":  time.Now().UTC().Format(time.RFC3339),
-		"source":     "redis-pubsub",
+		"emittedAt":  entry.EmittedAt,
+		"source":     entry.Source,
 		"confidence": "medium",
 	}
 	if err := a.cache.Publish(ctx, "commlayers-events", envelope); err != nil {
@@ -729,6 +748,40 @@ func (a *app) handleV2Roadmap(w http.ResponseWriter, r *http.Request) {
 			"stabilize frontend comparative UX against all v1 backend families",
 			"define real provider integrations that replace demo-grade data sources",
 			"freeze v2 paradigm acceptance gates per paradigm family",
+		},
+	})
+}
+
+func (a *app) handleV2EventDriven(w http.ResponseWriter, r *http.Request) {
+	type recentEvent struct {
+		ID        string         `json:"id"`
+		Kind      string         `json:"kind"`
+		Payload   map[string]any `json:"payload"`
+		EmittedAt string         `json:"emittedAt"`
+		Source    string         `json:"source"`
+	}
+	var events []recentEvent
+	if err := a.store.ListByKind(r.Context(), "domain_event", 12, &events); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load_domain_events_failed"})
+		return
+	}
+	projections := map[string]int{}
+	for _, event := range events {
+		projections[event.Kind]++
+	}
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"paradigm": "event_driven_architecture",
+		"status":   "active",
+		"commands": []string{"create workflow run", "create sync session", "mutate sync replica", "create transport session", "start async job"},
+		"events":   events,
+		"projections": map[string]any{
+			"eventKinds":         projections,
+			"sourceOfTruth":      "postgres domain_event records",
+			"transientBroadcast": "redis pubsub via /api/events",
+		},
+		"notes": []string{
+			"This is the first true v2 slice: command to event to projection behavior is now explicit.",
+			"The slice reuses the current v1 transport, messaging, sync, projection, and persistence/runtime surfaces.",
 		},
 	})
 }

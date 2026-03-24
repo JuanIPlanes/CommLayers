@@ -83,3 +83,35 @@ func (s *Store) Load(ctx context.Context, kind string, id string, dst any) (bool
 	}
 	return true, nil
 }
+
+func (s *Store) ListByKind(ctx context.Context, kind string, limit int, dst any) error {
+	const query = `
+SELECT payload
+FROM app_records
+WHERE kind = $1
+ORDER BY updated_at DESC
+LIMIT $2`
+
+	rows, err := s.db.QueryContext(ctx, query, kind, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	bodies := make([]json.RawMessage, 0)
+	for rows.Next() {
+		var body []byte
+		if err := rows.Scan(&body); err != nil {
+			return err
+		}
+		bodies = append(bodies, append(json.RawMessage(nil), body...))
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(bodies)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(encoded, dst)
+}

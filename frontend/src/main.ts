@@ -208,6 +208,25 @@ type V2Roadmap = {
   nextBeforeV2Implementation: string[]
 }
 
+type EventDrivenParadigm = {
+  paradigm: string
+  status: string
+  commands: string[]
+  events: Array<{
+    id: string
+    kind: string
+    payload: Record<string, unknown>
+    emittedAt: string
+    source: string
+  }>
+  projections: {
+    eventKinds: Record<string, number>
+    sourceOfTruth: string
+    transientBroadcast: string
+  }
+  notes: string[]
+}
+
 const uiMessages = {
   en: {
     title: 'First-wave execution console',
@@ -290,6 +309,7 @@ root.innerHTML = `
       <article class="panel" id="projection-card"><h2>Projection demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="pricing-card"><h2>Pricing demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="v2-roadmap-card"><h2>V2 groundwork</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="v2-event-card"><h2>V2 event-driven slice</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -363,7 +383,7 @@ async function renderApp() {
   ;(document.querySelector('#hero-title') as HTMLHeadingElement).textContent = copy.title
   ;(document.querySelector('#hero-lede') as HTMLParagraphElement).textContent = copy.lede
   ;(document.querySelector('#locale-label') as HTMLLabelElement).textContent = copy.localeLabel
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap, v2Event] = await Promise.all([
     fetchEnvelope<BootstrapData>(apiPath(`${apiBase}/bootstrap`)),
     fetchEnvelope<FirstWaveContract>(apiPath(`${apiBase}/first-wave/contract`)),
     fetchEnvelope<SecurityBootstrap>(apiPath(`${apiBase}/security/bootstrap`)),
@@ -379,6 +399,7 @@ async function renderApp() {
     fetchEnvelope<DeferredWavesData>(apiPath(`${apiBase}/deferred-waves`)),
     fetchEnvelope<V2Readiness>(apiPath(`${apiBase}/v2-readiness`)),
     fetchEnvelope<V2Roadmap>(apiPath(`${apiBase}/v2/roadmap`)),
+    fetchEnvelope<EventDrivenParadigm>(apiPath(`${apiBase}/v2/paradigms/event-driven`)),
   ])
 
   const heroMeta = document.querySelector('#hero-meta') as HTMLDivElement
@@ -568,6 +589,19 @@ async function renderApp() {
     )}</div>
     <div class="mini-section"><h4>V1 completed</h4>${list(v2Roadmap.data.v1Completed)}</div>
     <div class="mini-section"><h4>Before implementation</h4>${list(v2Roadmap.data.nextBeforeV2Implementation)}</div>
+  `
+
+  const v2EventCard = document.querySelector('#v2-event-card .body') as HTMLDivElement
+  v2EventCard.innerHTML = `
+    <p><strong>Paradigm:</strong> ${v2Event.data.paradigm} (${v2Event.data.status})</p>
+    <div class="mini-section"><h4>Commands</h4>${list(v2Event.data.commands)}</div>
+    <div class="mini-section"><h4>Recent events</h4>${list(
+      v2Event.data.events.map((event) => `${event.kind} @ ${event.emittedAt}`),
+    )}</div>
+    <div class="mini-section"><h4>Projection counts</h4>${list(
+      Object.entries(v2Event.data.projections.eventKinds).map(([kind, count]) => `${kind}: ${count}`),
+    )}</div>
+    <div class="mini-section"><h4>Notes</h4>${list(v2Event.data.notes)}</div>
   `
 
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement
