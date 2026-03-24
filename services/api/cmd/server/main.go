@@ -12,11 +12,16 @@ import (
 	"sync"
 	"time"
 
+	"commlayers/services/api/internal/cache"
+	"commlayers/services/api/internal/persistence"
+
 	"github.com/gorilla/websocket"
 )
 
 type app struct {
 	startedAt      time.Time
+	store          *persistence.Store
+	cache          *cache.Cache
 	jobs           sync.Map
 	sessions       sync.Map
 	workflows      sync.Map
@@ -200,7 +205,10 @@ type pricePoint struct {
 }
 
 func main() {
-	application := newApp()
+	application, err := newApp()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", application.handleHealth)
@@ -248,9 +256,20 @@ func main() {
 	}
 }
 
-func newApp() *app {
+func newApp() (*app, error) {
+	store, err := persistence.New(os.Getenv("POSTGRES_URL"))
+	if err != nil {
+		return nil, err
+	}
+	redisCache, err := cache.New(os.Getenv("REDIS_URL"))
+	if err != nil {
+		return nil, err
+	}
+
 	return &app{
 		startedAt: time.Now().UTC(),
+		store:     store,
+		cache:     redisCache,
 		streams: []stream{
 			{
 				ID:               "86agbv0k4",
@@ -458,7 +477,40 @@ func newApp() *app {
 			{ID: "vec-2", Label: "Workflow queue", Vector: []float64{0.2, 0.9, 0.1}, Summary: "Queued and staged orchestration", Transport: "workflow"},
 			{ID: "vec-3", Label: "Sync conflict", Vector: []float64{0.2, 0.3, 0.95}, Summary: "Conflict and merge-heavy collaboration", Transport: "sync"},
 		},
+	}, nil
+}
+
+func (a *app) saveRecord(ctx context.Context, kind string, id string, payload any) error {
+	if err := a.store.Save(ctx, kind, id, payload); err != nil {
+		return err
 	}
+	if a.cache != nil && a.cache.Enabled() {
+		if err := a.cache.Save(ctx, kind+":"+id, payload, 30*time.Minute); err != nil {
+			log.Printf("cache save failed kind=%s id=%s err=%v", kind, id, err)
+		}
+	}
+	return nil
+}
+
+func (a *app) loadRecord(ctx context.Context, kind string, id string, dst any) (bool, error) {
+	if a.cache != nil && a.cache.Enabled() {
+		ok, err := a.cache.Load(ctx, kind+":"+id, dst)
+		if err != nil {
+			log.Printf("cache load failed kind=%s id=%s err=%v", kind, id, err)
+		} else if ok {
+			return true, nil
+		}
+	}
+	ok, err := a.store.Load(ctx, kind, id, dst)
+	if !ok || err != nil {
+		return ok, err
+	}
+	if a.cache != nil && a.cache.Enabled() {
+		if err := a.cache.Save(ctx, kind+":"+id, dst, 30*time.Minute); err != nil {
+			log.Printf("cache warm failed kind=%s id=%s err=%v", kind, id, err)
+		}
+	}
+	return true, nil
 }
 
 func (a *app) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -711,7 +763,10 @@ func (a *app) handlePollingSession(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
-	a.sessions.Store(session.ID, session)
+	if err := a.saveRecord(r.Context(), "transport_session", session.ID, session); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_transport_session_failed"})
+		return
+	}
 	w.Header().Set("Location", "/api/transports/polling/"+session.ID)
 	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"session":   session,
@@ -732,20 +787,27 @@ func (a *app) handlePollingStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, ok := a.sessions.Load(id)
+	var session transportSession
+	ok, err := a.loadRecord(r.Context(), "transport_session", id, &session)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "transport_session_not_found"})
 		return
 	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load_transport_session_failed"})
+		return
+	}
 
-	session := raw.(transportSession)
 	if session.Mode == "long-polling" && session.Status != "completed" {
 		time.Sleep(time.Duration(session.RecommendedPollMS) * time.Millisecond)
 	}
 
 	session = nextTransportSessionState(session)
-	a.sessions.Store(id, session)
-	writeEnvelope(w, http.StatusOK, session)
+	if err := a.saveRecord(r.Context(), "transport_session", id, session); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_transport_session_failed"})
+		return
+	}
+	writeLocalizedEnvelope(w, r, http.StatusOK, session)
 }
 
 func (a *app) handleWebSocketDemo(w http.ResponseWriter, r *http.Request) {
@@ -806,7 +868,10 @@ func (a *app) handleWorkflowCreate(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	a.workflows.Store(run.ID, run)
+	if err := a.saveRecord(r.Context(), "workflow_run", run.ID, run); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_workflow_failed"})
+		return
+	}
 	w.Header().Set("Location", "/api/messaging/workflows/"+run.ID)
 	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"workflow":  run,
@@ -827,15 +892,23 @@ func (a *app) handleWorkflowStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, ok := a.workflows.Load(id)
+	var run workflowRun
+	ok, err := a.loadRecord(r.Context(), "workflow_run", id, &run)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "workflow_not_found"})
 		return
 	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load_workflow_failed"})
+		return
+	}
 
-	run := nextWorkflowState(raw.(workflowRun))
-	a.workflows.Store(id, run)
-	writeEnvelope(w, http.StatusOK, run)
+	run = nextWorkflowState(run)
+	if err := a.saveRecord(r.Context(), "workflow_run", id, run); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_workflow_failed"})
+		return
+	}
+	writeLocalizedEnvelope(w, r, http.StatusOK, run)
 }
 
 func (a *app) handleSyncOverview(w http.ResponseWriter, r *http.Request) {
@@ -999,7 +1072,10 @@ func (a *app) handleSyncSessionCreate(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
-	a.syncRuns.Store(session.ID, session)
+	if err := a.saveRecord(r.Context(), "sync_session", session.ID, session); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_sync_session_failed"})
+		return
+	}
 	w.Header().Set("Location", "/api/sync/sessions/"+session.ID)
 	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"session":   session,
@@ -1021,13 +1097,17 @@ func (a *app) handleSyncSessionAction(w http.ResponseWriter, r *http.Request) {
 		action = parts[1]
 	}
 
-	raw, ok := a.syncRuns.Load(id)
+	var session syncSession
+	ok, err := a.loadRecord(r.Context(), "sync_session", id, &session)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "sync_session_not_found"})
 		return
 	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load_sync_session_failed"})
+		return
+	}
 
-	session := raw.(syncSession)
 	switch action {
 	case "status":
 		if r.Method != http.MethodGet {
@@ -1062,8 +1142,11 @@ func (a *app) handleSyncSessionAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.syncRuns.Store(id, session)
-	writeEnvelope(w, http.StatusOK, session)
+	if err := a.saveRecord(r.Context(), "sync_session", id, session); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_sync_session_failed"})
+		return
+	}
+	writeLocalizedEnvelope(w, r, http.StatusOK, session)
 }
 
 func (a *app) handleRealtimeComparisons(w http.ResponseWriter, r *http.Request) {
@@ -1121,7 +1204,10 @@ func (a *app) handleAsyncDemo(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
-	a.jobs.Store(jobID, status)
+	if err := a.saveRecord(r.Context(), "job_status", jobID, status); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_job_failed"})
+		return
+	}
 	go a.runJob(context.Background(), jobID)
 
 	w.Header().Set("Location", "/api/async/demo/"+jobID)
@@ -1139,13 +1225,18 @@ func (a *app) handleAsyncStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, ok := a.jobs.Load(jobID)
+	var state jobStatus
+	ok, err := a.loadRecord(r.Context(), "job_status", jobID, &state)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "job_not_found"})
 		return
 	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load_job_failed"})
+		return
+	}
 
-	writeEnvelope(w, http.StatusOK, raw)
+	writeLocalizedEnvelope(w, r, http.StatusOK, state)
 }
 
 func (a *app) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -1194,18 +1285,24 @@ func (a *app) runJob(ctx context.Context, jobID string) {
 		case <-time.After(1400 * time.Millisecond):
 		}
 
-		raw, ok := a.jobs.Load(jobID)
+		var state jobStatus
+		ok, err := a.loadRecord(ctx, "job_status", jobID, &state)
 		if !ok {
 			return
 		}
-
-		state := raw.(jobStatus)
+		if err != nil {
+			log.Printf("load job failed job=%s err=%v", jobID, err)
+			return
+		}
 		state.Status = step.status
 		state.Progress = step.progress
 		state.CurrentStep = step.step
 		state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		state.Timeline = append(state.Timeline, step.step)
-		a.jobs.Store(jobID, state)
+		if err := a.saveRecord(ctx, "job_status", jobID, state); err != nil {
+			log.Printf("persist job failed job=%s err=%v", jobID, err)
+			return
+		}
 	}
 }
 
