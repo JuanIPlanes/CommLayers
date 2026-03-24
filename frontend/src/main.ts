@@ -240,6 +240,19 @@ type ReactiveStreamDriven = {
   notes: string[]
 }
 
+type LocalFirstCRDT = {
+  paradigm: string
+  status: string
+  syncSignals: {
+    recentSessionCount: number
+    alignedSessions: number
+    conflictSessions: number
+    maxObservedLag: number
+  }
+  mergeRules: string[]
+  notes: string[]
+}
+
 const uiMessages = {
   en: {
     title: 'First-wave execution console',
@@ -324,6 +337,7 @@ root.innerHTML = `
       <article class="panel" id="v2-roadmap-card"><h2>V2 groundwork</h2><div class="body">Loading...</div></article>
       <article class="panel" id="v2-event-card"><h2>V2 event-driven slice</h2><div class="body">Loading...</div></article>
       <article class="panel" id="v2-reactive-card"><h2>V2 reactive stream slice</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="v2-localfirst-card"><h2>V2 local-first / CRDT slice</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -397,7 +411,7 @@ async function renderApp() {
   ;(document.querySelector('#hero-title') as HTMLHeadingElement).textContent = copy.title
   ;(document.querySelector('#hero-lede') as HTMLParagraphElement).textContent = copy.lede
   ;(document.querySelector('#locale-label') as HTMLLabelElement).textContent = copy.localeLabel
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap, v2Event, v2Reactive] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap, v2Event, v2Reactive, v2LocalFirst] = await Promise.all([
     fetchEnvelope<BootstrapData>(apiPath(`${apiBase}/bootstrap`)),
     fetchEnvelope<FirstWaveContract>(apiPath(`${apiBase}/first-wave/contract`)),
     fetchEnvelope<SecurityBootstrap>(apiPath(`${apiBase}/security/bootstrap`)),
@@ -415,6 +429,7 @@ async function renderApp() {
     fetchEnvelope<V2Roadmap>(apiPath(`${apiBase}/v2/roadmap`)),
     fetchEnvelope<EventDrivenParadigm>(apiPath(`${apiBase}/v2/paradigms/event-driven`)),
     fetchEnvelope<ReactiveStreamDriven>(apiPath(`${apiBase}/v2/paradigms/reactive-stream-driven`)),
+    fetchEnvelope<LocalFirstCRDT>(apiPath(`${apiBase}/v2/paradigms/local-first-crdt`)),
   ])
 
   const heroMeta = document.querySelector('#hero-meta') as HTMLDivElement
@@ -630,6 +645,19 @@ async function renderApp() {
     ])}</div>
     <div class="mini-section"><h4>Backpressure hints</h4>${list(v2Reactive.data.backpressureHints)}</div>
     <div class="mini-section"><h4>Notes</h4>${list(v2Reactive.data.notes)}</div>
+  `
+
+  const v2LocalFirstCard = document.querySelector('#v2-localfirst-card .body') as HTMLDivElement
+  v2LocalFirstCard.innerHTML = `
+    <p><strong>Paradigm:</strong> ${v2LocalFirst.data.paradigm} (${v2LocalFirst.data.status})</p>
+    <div class="mini-section"><h4>Sync signals</h4>${list([
+      `recent sessions: ${v2LocalFirst.data.syncSignals.recentSessionCount}`,
+      `aligned sessions: ${v2LocalFirst.data.syncSignals.alignedSessions}`,
+      `conflict sessions: ${v2LocalFirst.data.syncSignals.conflictSessions}`,
+      `max observed lag: ${v2LocalFirst.data.syncSignals.maxObservedLag}`,
+    ])}</div>
+    <div class="mini-section"><h4>Merge rules</h4>${list(v2LocalFirst.data.mergeRules)}</div>
+    <div class="mini-section"><h4>Notes</h4>${list(v2LocalFirst.data.notes)}</div>
   `
 
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement

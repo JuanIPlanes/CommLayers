@@ -248,6 +248,7 @@ func main() {
 	mux.HandleFunc("/api/v2/roadmap", application.handleV2Roadmap)
 	mux.HandleFunc("/api/v2/paradigms/event-driven", application.handleV2EventDriven)
 	mux.HandleFunc("/api/v2/paradigms/reactive-stream-driven", application.handleV2ReactiveStreamDriven)
+	mux.HandleFunc("/api/v2/paradigms/local-first-crdt", application.handleV2LocalFirstCRDT)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -827,6 +828,47 @@ func (a *app) handleV2ReactiveStreamDriven(w http.ResponseWriter, r *http.Reques
 		"notes": []string{
 			"This slice treats the current domain-event stream as the basis for a reactive view.",
 			"It reuses the event log and Redis transient flow without claiming a full Kafka/Flink-grade system yet.",
+		},
+	})
+}
+
+func (a *app) handleV2LocalFirstCRDT(w http.ResponseWriter, r *http.Request) {
+	var sessions []syncSession
+	if err := a.store.ListByKind(r.Context(), "sync_session", 12, &sessions); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load_sync_sessions_failed"})
+		return
+	}
+	conflicts := 0
+	aligned := 0
+	maxLag := 0
+	for _, session := range sessions {
+		if session.Conflict {
+			conflicts++
+		}
+		if session.Status == "aligned" {
+			aligned++
+		}
+		if session.Lag > maxLag {
+			maxLag = session.Lag
+		}
+	}
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"paradigm": "local_first_crdt",
+		"status":   "active",
+		"syncSignals": map[string]any{
+			"recentSessionCount": len(sessions),
+			"alignedSessions":    aligned,
+			"conflictSessions":   conflicts,
+			"maxObservedLag":     maxLag,
+		},
+		"mergeRules": []string{
+			"Single-side divergence catches up by replaying the latest persisted value.",
+			"Equal-version divergence merges deterministically into a combined value in the bootstrap model.",
+			"Conflict and lag are surfaced as first-class signals for later CRDT evolution.",
+		},
+		"notes": []string{
+			"This slice is local-first and CRDT-oriented, not a full CRDT engine yet.",
+			"It reuses persisted sync sessions to make offline-ish divergence and merge semantics visible.",
 		},
 	})
 }
