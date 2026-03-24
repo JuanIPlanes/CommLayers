@@ -227,6 +227,19 @@ type EventDrivenParadigm = {
   notes: string[]
 }
 
+type ReactiveStreamDriven = {
+  paradigm: string
+  status: string
+  streamSignals: {
+    recentEventCount: number
+    eventKinds: Record<string, number>
+    latestEventAt: string
+    transportSurface: string
+  }
+  backpressureHints: string[]
+  notes: string[]
+}
+
 const uiMessages = {
   en: {
     title: 'First-wave execution console',
@@ -310,6 +323,7 @@ root.innerHTML = `
       <article class="panel" id="pricing-card"><h2>Pricing demos</h2><div class="body">Loading...</div></article>
       <article class="panel" id="v2-roadmap-card"><h2>V2 groundwork</h2><div class="body">Loading...</div></article>
       <article class="panel" id="v2-event-card"><h2>V2 event-driven slice</h2><div class="body">Loading...</div></article>
+      <article class="panel" id="v2-reactive-card"><h2>V2 reactive stream slice</h2><div class="body">Loading...</div></article>
       <article class="panel" id="events-card"><h2>SSE progress demo</h2><div class="body"><ul id="events-list" class="stack compact"></ul></div></article>
       <article class="panel" id="async-card">
         <h2>Async visibility demo</h2>
@@ -383,7 +397,7 @@ async function renderApp() {
   ;(document.querySelector('#hero-title') as HTMLHeadingElement).textContent = copy.title
   ;(document.querySelector('#hero-lede') as HTMLParagraphElement).textContent = copy.lede
   ;(document.querySelector('#locale-label') as HTMLLabelElement).textContent = copy.localeLabel
-  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap, v2Event] = await Promise.all([
+  const [bootstrap, firstWave, security, dataPlatform, benchmark, catalog, realtime, transports, messaging, sync, projections, pricing, deferred, v2, v2Roadmap, v2Event, v2Reactive] = await Promise.all([
     fetchEnvelope<BootstrapData>(apiPath(`${apiBase}/bootstrap`)),
     fetchEnvelope<FirstWaveContract>(apiPath(`${apiBase}/first-wave/contract`)),
     fetchEnvelope<SecurityBootstrap>(apiPath(`${apiBase}/security/bootstrap`)),
@@ -400,6 +414,7 @@ async function renderApp() {
     fetchEnvelope<V2Readiness>(apiPath(`${apiBase}/v2-readiness`)),
     fetchEnvelope<V2Roadmap>(apiPath(`${apiBase}/v2/roadmap`)),
     fetchEnvelope<EventDrivenParadigm>(apiPath(`${apiBase}/v2/paradigms/event-driven`)),
+    fetchEnvelope<ReactiveStreamDriven>(apiPath(`${apiBase}/v2/paradigms/reactive-stream-driven`)),
   ])
 
   const heroMeta = document.querySelector('#hero-meta') as HTMLDivElement
@@ -602,6 +617,19 @@ async function renderApp() {
       Object.entries(v2Event.data.projections.eventKinds).map(([kind, count]) => `${kind}: ${count}`),
     )}</div>
     <div class="mini-section"><h4>Notes</h4>${list(v2Event.data.notes)}</div>
+  `
+
+  const v2ReactiveCard = document.querySelector('#v2-reactive-card .body') as HTMLDivElement
+  v2ReactiveCard.innerHTML = `
+    <p><strong>Paradigm:</strong> ${v2Reactive.data.paradigm} (${v2Reactive.data.status})</p>
+    <div class="mini-section"><h4>Stream signals</h4>${list([
+      `recent events: ${v2Reactive.data.streamSignals.recentEventCount}`,
+      `latest event: ${v2Reactive.data.streamSignals.latestEventAt || 'n/a'}`,
+      `transport: ${v2Reactive.data.streamSignals.transportSurface}`,
+      ...Object.entries(v2Reactive.data.streamSignals.eventKinds).map(([kind, count]) => `${kind}: ${count}`),
+    ])}</div>
+    <div class="mini-section"><h4>Backpressure hints</h4>${list(v2Reactive.data.backpressureHints)}</div>
+    <div class="mini-section"><h4>Notes</h4>${list(v2Reactive.data.notes)}</div>
   `
 
   const deferredCard = document.querySelector('#deferred-card .body') as HTMLDivElement

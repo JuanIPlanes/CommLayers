@@ -247,6 +247,7 @@ func main() {
 	mux.HandleFunc("/api/pricing", application.handlePricingOverview)
 	mux.HandleFunc("/api/v2/roadmap", application.handleV2Roadmap)
 	mux.HandleFunc("/api/v2/paradigms/event-driven", application.handleV2EventDriven)
+	mux.HandleFunc("/api/v2/paradigms/reactive-stream-driven", application.handleV2ReactiveStreamDriven)
 	mux.HandleFunc("/api/async/demo", application.handleAsyncDemo)
 	mux.HandleFunc("/api/async/demo/", application.handleAsyncStatus)
 	mux.HandleFunc("/api/events", application.handleEvents)
@@ -782,6 +783,50 @@ func (a *app) handleV2EventDriven(w http.ResponseWriter, r *http.Request) {
 		"notes": []string{
 			"This is the first true v2 slice: command to event to projection behavior is now explicit.",
 			"The slice reuses the current v1 transport, messaging, sync, projection, and persistence/runtime surfaces.",
+		},
+	})
+}
+
+func (a *app) handleV2ReactiveStreamDriven(w http.ResponseWriter, r *http.Request) {
+	type recentEvent struct {
+		ID        string         `json:"id"`
+		Kind      string         `json:"kind"`
+		Payload   map[string]any `json:"payload"`
+		EmittedAt string         `json:"emittedAt"`
+		Source    string         `json:"source"`
+	}
+	var events []recentEvent
+	if err := a.store.ListByKind(r.Context(), "domain_event", 24, &events); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "load_domain_events_failed"})
+		return
+	}
+
+	kindCounts := map[string]int{}
+	var latestEvent string
+	for _, event := range events {
+		kindCounts[event.Kind]++
+		if latestEvent == "" {
+			latestEvent = event.EmittedAt
+		}
+	}
+
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"paradigm": "reactive_stream_driven",
+		"status":   "active",
+		"streamSignals": map[string]any{
+			"recentEventCount": len(events),
+			"eventKinds":       kindCounts,
+			"latestEventAt":    latestEvent,
+			"transportSurface": "SSE plus Redis transient events",
+		},
+		"backpressureHints": []string{
+			"Use event counts per kind as the first stream-pressure indicator.",
+			"Workflow and async job events are the first candidates for reactive throttling.",
+			"Projection refresh cadence should follow event density rather than fixed polling only.",
+		},
+		"notes": []string{
+			"This slice treats the current domain-event stream as the basis for a reactive view.",
+			"It reuses the event log and Redis transient flow without claiming a full Kafka/Flink-grade system yet.",
 		},
 	})
 }
