@@ -61,3 +61,25 @@ func (c *Cache) Load(ctx context.Context, key string, dst any) (bool, error) {
 	}
 	return true, nil
 }
+
+func (c *Cache) Publish(ctx context.Context, channel string, payload any) error {
+	if !c.Enabled() {
+		return nil
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return c.client.Publish(ctx, channel, body).Err()
+}
+
+func (c *Cache) Subscribe(ctx context.Context, channel string) (*redis.PubSub, error) {
+	if !c.Enabled() {
+		return nil, nil
+	}
+	pubsub := c.client.Subscribe(ctx, channel)
+	if _, err := pubsub.Receive(ctx); err != nil {
+		return nil, err
+	}
+	return pubsub, nil
+}

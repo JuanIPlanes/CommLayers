@@ -40,6 +40,7 @@ Implemented in this first working version:
 - Compose-based runtime with PostgreSQL and Redis active by default
 - real Postgres-backed persistence for workflow runs, transport sessions, sync sessions, and async job state
 - Redis-backed ephemeral cache layer for persisted demo entities
+- Redis-backed transient event flow for SSE updates across workflow, sync, transport, and async demo changes
 - Optional backend profiles for Elasticsearch, Neo4j, Qdrant, and MongoDB
 
 Not implemented yet:
@@ -115,6 +116,7 @@ Validation result at the current stage:
 - frontend compose config passed
 - full split stack startup passed through the frontend gateway on `4173`
 - persisted workflow and sync records survived an API container restart
+- SSE now streams Redis-backed transient events for workflow, sync, transport, and async job state changes
 
 ## Notes
 

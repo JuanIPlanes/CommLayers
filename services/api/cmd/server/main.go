@@ -513,6 +513,22 @@ func (a *app) loadRecord(ctx context.Context, kind string, id string, dst any) (
 	return true, nil
 }
 
+func (a *app) emitTransientEvent(ctx context.Context, kind string, payload map[string]any) {
+	if a.cache == nil || !a.cache.Enabled() {
+		return
+	}
+	envelope := map[string]any{
+		"kind":       kind,
+		"payload":    payload,
+		"emittedAt":  time.Now().UTC().Format(time.RFC3339),
+		"source":     "redis-pubsub",
+		"confidence": "medium",
+	}
+	if err := a.cache.Publish(ctx, "commlayers-events", envelope); err != nil {
+		log.Printf("publish event failed kind=%s err=%v", kind, err)
+	}
+}
+
 func (a *app) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service":   "commlayers-api",
@@ -767,6 +783,12 @@ func (a *app) handlePollingSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_transport_session_failed"})
 		return
 	}
+	a.emitTransientEvent(r.Context(), "transport_session", map[string]any{
+		"id":     session.ID,
+		"mode":   session.Mode,
+		"status": session.Status,
+		"step":   session.Step,
+	})
 	w.Header().Set("Location", "/api/transports/polling/"+session.ID)
 	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"session":   session,
@@ -807,6 +829,12 @@ func (a *app) handlePollingStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_transport_session_failed"})
 		return
 	}
+	a.emitTransientEvent(r.Context(), "transport_session", map[string]any{
+		"id":     session.ID,
+		"mode":   session.Mode,
+		"status": session.Status,
+		"step":   session.Step,
+	})
 	writeLocalizedEnvelope(w, r, http.StatusOK, session)
 }
 
@@ -872,6 +900,12 @@ func (a *app) handleWorkflowCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_workflow_failed"})
 		return
 	}
+	a.emitTransientEvent(r.Context(), "workflow_run", map[string]any{
+		"id":       run.ID,
+		"status":   run.Status,
+		"stage":    run.CurrentStage,
+		"progress": run.Progress,
+	})
 	w.Header().Set("Location", "/api/messaging/workflows/"+run.ID)
 	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"workflow":  run,
@@ -908,6 +942,12 @@ func (a *app) handleWorkflowStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_workflow_failed"})
 		return
 	}
+	a.emitTransientEvent(r.Context(), "workflow_run", map[string]any{
+		"id":       run.ID,
+		"status":   run.Status,
+		"stage":    run.CurrentStage,
+		"progress": run.Progress,
+	})
 	writeLocalizedEnvelope(w, r, http.StatusOK, run)
 }
 
@@ -1076,6 +1116,12 @@ func (a *app) handleSyncSessionCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_sync_session_failed"})
 		return
 	}
+	a.emitTransientEvent(r.Context(), "sync_session", map[string]any{
+		"id":       session.ID,
+		"status":   session.Status,
+		"conflict": session.Conflict,
+		"lag":      session.Lag,
+	})
 	w.Header().Set("Location", "/api/sync/sessions/"+session.ID)
 	writeLocalizedEnvelope(w, r, http.StatusCreated, map[string]any{
 		"session":   session,
@@ -1146,6 +1192,12 @@ func (a *app) handleSyncSessionAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_sync_session_failed"})
 		return
 	}
+	a.emitTransientEvent(r.Context(), "sync_session", map[string]any{
+		"id":       session.ID,
+		"status":   session.Status,
+		"conflict": session.Conflict,
+		"lag":      session.Lag,
+	})
 	writeLocalizedEnvelope(w, r, http.StatusOK, session)
 }
 
@@ -1208,6 +1260,12 @@ func (a *app) handleAsyncDemo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist_job_failed"})
 		return
 	}
+	a.emitTransientEvent(r.Context(), "job_status", map[string]any{
+		"jobId":    jobID,
+		"status":   status.Status,
+		"progress": status.Progress,
+		"step":     status.CurrentStep,
+	})
 	go a.runJob(context.Background(), jobID)
 
 	w.Header().Set("Location", "/api/async/demo/"+jobID)
@@ -1250,14 +1308,33 @@ func (a *app) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events := []map[string]any{
+	ctx := r.Context()
+	pubsub, err := a.cache.Subscribe(ctx, "commlayers-events")
+	if err == nil && pubsub != nil {
+		defer pubsub.Close()
+		channel := pubsub.Channel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-channel:
+				if !ok {
+					return
+				}
+				fmt.Fprintf(w, "event: transient\n")
+				fmt.Fprintf(w, "data: %s\n\n", msg.Payload)
+				flusher.Flush()
+			}
+		}
+	}
+
+	fallback := []map[string]any{
 		{"step": "bootstrap_started", "delayAppliedMs": 250, "label": "Bootstrap started"},
 		{"step": "first_wave_loaded", "delayAppliedMs": 700, "label": "First-wave contract loaded"},
 		{"step": "deferred_waves_held", "delayAppliedMs": 1025, "label": "Deferred waves confirmed held"},
 		{"step": "sse_demo_complete", "delayAppliedMs": 1350, "label": "SSE demo complete"},
 	}
-
-	for _, event := range events {
+	for _, event := range fallback {
 		payload, _ := json.Marshal(event)
 		fmt.Fprintf(w, "event: progress\n")
 		fmt.Fprintf(w, "data: %s\n\n", payload)
@@ -1303,6 +1380,12 @@ func (a *app) runJob(ctx context.Context, jobID string) {
 			log.Printf("persist job failed job=%s err=%v", jobID, err)
 			return
 		}
+		a.emitTransientEvent(ctx, "job_status", map[string]any{
+			"jobId":    jobID,
+			"status":   state.Status,
+			"progress": state.Progress,
+			"step":     state.CurrentStep,
+		})
 	}
 }
 
