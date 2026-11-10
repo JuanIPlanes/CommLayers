@@ -90,6 +90,9 @@ func BuildMux(routes Routes) *http.ServeMux {
 func BuildRouter(base http.Handler, bm *BenchmarkMiddleware) http.Handler {
 	// Apply benchmark middleware first to capture all requests
 	wrapped := bm.Handler(base)
+	// Apply audit middleware for security audit trail
+	wrapped = authpkg.AuditMiddleware(wrapped)
+	// Apply auth middleware last (if enabled)
 	if authpkg.IsEnabled() {
 		return authpkg.KeycloakMiddleware(wrapped)
 	}
