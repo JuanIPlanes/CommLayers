@@ -9,7 +9,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"commlayers/services/api/internal/cache"
@@ -17,200 +16,6 @@ import (
 
 	"github.com/gorilla/websocket"
 )
-
-type app struct {
-	startedAt      time.Time
-	store          *persistence.Store
-	cache          *cache.Cache
-	jobs           sync.Map
-	sessions       sync.Map
-	workflows      sync.Map
-	syncRuns       sync.Map
-	projectionDocs []projectionDoc
-	graphNodes     []graphNode
-	vectorDocs     []vectorDoc
-	streams        []stream
-	families       []family
-	waves          []deferredWave
-}
-
-type stream struct {
-	ID               string   `json:"id"`
-	Title            string   `json:"title"`
-	Role             string   `json:"role"`
-	Category         string   `json:"category"`
-	Description      string   `json:"description"`
-	Status           string   `json:"status"`
-	Dependencies     []string `json:"dependencies"`
-	Deliverables     []string `json:"deliverables"`
-	AcceptanceGates  []string `json:"acceptanceGates"`
-	ExecutionPackets []string `json:"executionPackets"`
-}
-
-type family struct {
-	Name            string   `json:"name"`
-	Category        string   `json:"category"`
-	Status          string   `json:"status"`
-	RecommendedWhen []string `json:"recommendedWhen"`
-	AvoidWhen       []string `json:"avoidWhen"`
-	Notes           []string `json:"notes"`
-}
-
-type deferredWave struct {
-	Name             string   `json:"name"`
-	Purpose          string   `json:"purpose"`
-	Streams          []string `json:"streams"`
-	Focus            []string `json:"focus"`
-	ReactivationRule []string `json:"reactivationRule"`
-}
-
-type jobStatus struct {
-	ID               string   `json:"id"`
-	Status           string   `json:"status"`
-	Progress         int      `json:"progress"`
-	CurrentStep      string   `json:"currentStep"`
-	DelayAppliedMS   int      `json:"delayAppliedMs"`
-	TimeoutThreshold int      `json:"timeoutThresholdMs"`
-	Timeline         []string `json:"timeline"`
-	CreatedAt        string   `json:"createdAt"`
-	UpdatedAt        string   `json:"updatedAt"`
-}
-
-type responseEnvelope struct {
-	Data       any    `json:"data"`
-	Source     string `json:"source"`
-	Confidence string `json:"confidence"`
-	Staleness  string `json:"staleness"`
-	MeasuredAt string `json:"measuredAt"`
-	Locale     string `json:"locale"`
-}
-
-var messages = map[string]map[string]string{
-	"en": {
-		"bootstrap.summary":   "Backend-first bootstrap with a concrete first-wave contract surface and deferred later waves.",
-		"bootstrap.phase":     "first-wave materialized",
-		"bootstrap.go_no_go":  "Hold until 86agbv0k4 is finalized, 86agbv0k3 and 86agbv0k7 overlap safely, and 86agbv0k9 closes the wave.",
-		"catalog.note.one":    "This is the first working version, not the full platform.",
-		"catalog.note.two":    "Later backend families remain staged until the first-wave closure gate is accepted.",
-		"catalog.note.three":  "SSE is the default push example in the bootstrap; WebSocket remains planned, not fully implemented.",
-		"security.state":      "documented and staged; runtime integration intentionally deferred in the first working version",
-		"messaging.note.one":  "This slice uses an in-memory workflow run rather than a real broker.",
-		"messaging.note.two":  "The goal is to expose queue and stage transitions clearly through the frontend before adding distributed messaging infrastructure.",
-		"sync.note.one":       "This slice models sync and replication in memory to keep the bootstrap honest and observable.",
-		"sync.note.two":       "Replication is explicit and conflict resolution is surfaced as visible state rather than hidden machinery.",
-		"projection.note.one": "These demos are in-memory projections, not real Elasticsearch/Neo4j/Qdrant integrations.",
-		"projection.note.two": "The goal is to prove the projection family surface before attaching heavyweight engines later.",
-		"v2.status":           "not_started",
-	},
-	"es": {
-		"bootstrap.summary":   "Bootstrap backend-first con una superficie contractual concreta de primera ola y olas posteriores diferidas.",
-		"bootstrap.phase":     "primera ola materializada",
-		"bootstrap.go_no_go":  "Esperar hasta que 86agbv0k4 quede finalizado, 86agbv0k3 y 86agbv0k7 se superpongan de forma segura, y 86agbv0k9 cierre la ola.",
-		"catalog.note.one":    "Esta es la primera version funcional, no la plataforma completa.",
-		"catalog.note.two":    "Las familias backend posteriores siguen en espera hasta que se acepte el cierre de la primera ola.",
-		"catalog.note.three":  "SSE es el ejemplo push por defecto en el bootstrap; WebSocket sigue planificado pero no totalmente implementado.",
-		"security.state":      "documentado y preparado; la integracion runtime se difiere intencionalmente en esta primera version funcional",
-		"messaging.note.one":  "Esta porcion usa una ejecucion de workflow en memoria en lugar de un broker real.",
-		"messaging.note.two":  "El objetivo es exponer con claridad las transiciones de cola y etapas en el frontend antes de agregar infraestructura de mensajeria distribuida.",
-		"sync.note.one":       "Esta porcion modela sincronizacion y replicacion en memoria para mantener el bootstrap honesto y observable.",
-		"sync.note.two":       "La replicacion es explicita y la resolucion de conflictos se muestra como estado visible en lugar de maquinaria oculta.",
-		"projection.note.one": "Estas demos son proyecciones en memoria, no integraciones reales con Elasticsearch/Neo4j/Qdrant.",
-		"projection.note.two": "El objetivo es probar la superficie de la familia de proyecciones antes de conectar motores pesados mas adelante.",
-		"v2.status":           "no_iniciado",
-	},
-}
-
-type comparison struct {
-	Name            string   `json:"name"`
-	RecommendedFor  []string `json:"recommendedFor"`
-	AvoidWhen       []string `json:"avoidWhen"`
-	LatencyClass    string   `json:"latencyClass"`
-	DefaultDecision string   `json:"defaultDecision"`
-	Notes           []string `json:"notes"`
-}
-
-type transportSession struct {
-	ID                string   `json:"id"`
-	Mode              string   `json:"mode"`
-	Status            string   `json:"status"`
-	Step              int      `json:"step"`
-	TotalSteps        int      `json:"totalSteps"`
-	RecommendedPollMS int      `json:"recommendedPollMs"`
-	DelayAppliedMS    int      `json:"delayAppliedMs"`
-	Timeline          []string `json:"timeline"`
-	CreatedAt         string   `json:"createdAt"`
-	UpdatedAt         string   `json:"updatedAt"`
-}
-
-type workflowRun struct {
-	ID             string   `json:"id"`
-	Status         string   `json:"status"`
-	Queue          string   `json:"queue"`
-	CurrentStage   string   `json:"currentStage"`
-	Progress       int      `json:"progress"`
-	DelayAppliedMS int      `json:"delayAppliedMs"`
-	Timeline       []string `json:"timeline"`
-	CreatedAt      string   `json:"createdAt"`
-	UpdatedAt      string   `json:"updatedAt"`
-}
-
-type syncSession struct {
-	ID              string   `json:"id"`
-	Status          string   `json:"status"`
-	PrimaryValue    string   `json:"primaryValue"`
-	ReplicaValue    string   `json:"replicaValue"`
-	PrimaryVersion  int      `json:"primaryVersion"`
-	ReplicaVersion  int      `json:"replicaVersion"`
-	Conflict        bool     `json:"conflict"`
-	Lag             int      `json:"lag"`
-	LastReplication string   `json:"lastReplication"`
-	Timeline        []string `json:"timeline"`
-	CreatedAt       string   `json:"createdAt"`
-	UpdatedAt       string   `json:"updatedAt"`
-}
-
-type projectionDoc struct {
-	ID      string   `json:"id"`
-	Title   string   `json:"title"`
-	Tokens  []string `json:"tokens"`
-	Summary string   `json:"summary"`
-}
-
-type graphNode struct {
-	ID          string   `json:"id"`
-	Label       string   `json:"label"`
-	DependsOn   []string `json:"dependsOn"`
-	Category    string   `json:"category"`
-	Description string   `json:"description"`
-}
-
-type vectorDoc struct {
-	ID        string    `json:"id"`
-	Label     string    `json:"label"`
-	Vector    []float64 `json:"vector"`
-	Summary   string    `json:"summary"`
-	Transport string    `json:"transport"`
-}
-
-type pricePoint struct {
-	Provider   string  `json:"provider"`
-	Service    string  `json:"service"`
-	Region     string  `json:"region"`
-	Currency   string  `json:"currency"`
-	HourlyUSD  float64 `json:"hourlyUsd"`
-	FreshnessS int     `json:"freshnessS"`
-	Confidence string  `json:"confidence"`
-	Staleness  string  `json:"staleness"`
-	Fallback   bool    `json:"fallback"`
-}
-
-type eventRecord struct {
-	ID        string         `json:"id"`
-	Kind      string         `json:"kind"`
-	Payload   map[string]any `json:"payload"`
-	EmittedAt string         `json:"emittedAt"`
-	Source    string         `json:"source"`
-}
 
 func main() {
 	application, err := newApp()
@@ -1356,37 +1161,34 @@ func (a *app) handleSyncSessionAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
-	case "status":
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
-			return
-		}
 	case "mutate":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
 			return
 		}
-		target := r.URL.Query().Get("target")
-		if target == "" {
-			target = "primary"
-		}
-		value := r.URL.Query().Get("value")
-		if value == "" {
-			value = fmt.Sprintf("%s-edit-%d", target, time.Now().Unix()%1000)
-		}
-		session = mutateSyncSession(session, target, value)
-	case "replicate":
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_payload"})
 			return
 		}
-		session = replicateSyncSession(session)
-	default:
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unsupported_sync_action"})
-		return
+		if v, ok := payload["replicaValue"].(string); ok {
+			session.ReplicaValue = v
+			session.ReplicaVersion++
+			session.Conflict = session.PrimaryValue != session.ReplicaValue
+			session.Lag = 1
+			session.LastReplication = time.Now().UTC().Format(time.RFC3339)
+			session.Timeline = append(session.Timeline, "replica_mutated")
+			session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		}
+	case "replicate":
+		session.ReplicaValue = session.PrimaryValue
+		session.ReplicaVersion = session.PrimaryVersion
+		session.Conflict = false
+		session.Lag = 0
+		session.LastReplication = time.Now().UTC().Format(time.RFC3339)
+		session.Timeline = append(session.Timeline, "replicated")
+		session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	if err := a.saveRecord(r.Context(), "sync_session", id, session); err != nil {
@@ -1400,6 +1202,246 @@ func (a *app) handleSyncSessionAction(w http.ResponseWriter, r *http.Request) {
 		"lag":      session.Lag,
 	})
 	writeLocalizedEnvelope(w, r, http.StatusOK, session)
+}
+
+func (a *app) handleEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming_not_supported"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ctx := r.Context()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			entry := eventRecord{
+				ID:        fmt.Sprintf("evt-%d", time.Now().UnixNano()),
+				Kind:      "demo",
+				Payload:   map[string]any{"tick": time.Now().Unix()},
+				EmittedAt: time.Now().UTC().Format(time.RFC3339),
+				Source:    "demo-generator",
+			}
+			data, _ := json.Marshal(entry)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+}
+
+func msg(locale string, key string) string {
+	if catalog, ok := messages[locale]; ok {
+		if value, ok := catalog[key]; ok {
+			return value
+		}
+	}
+	if value, ok := messages["en"][key]; ok {
+		return value
+	}
+	return key
+}
+
+func writeLocalizedEnvelope(w http.ResponseWriter, r *http.Request, status int, data any) {
+	locale := localeFromRequest(r)
+	writeJSON(w, status, responseEnvelope{
+		Data:       data,
+		Source:     "bootstrap",
+		Confidence: "medium",
+		Staleness:  "fresh",
+		MeasuredAt: time.Now().UTC().Format(time.RFC3339),
+		Locale:     locale,
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("encode error: %v", err)
+	}
+}
+
+func localeFromRequest(r *http.Request) string {
+	locale := r.URL.Query().Get("locale")
+	if locale == "" {
+		locale = "en"
+	}
+	if locale != "en" && locale != "es" {
+		locale = "en"
+	}
+	return locale
+}
+
+func filterStreams(streams []stream, predicate func(stream) bool) []stream {
+	result := make([]stream, 0)
+	for _, s := range streams {
+		if predicate(s) {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+func writeEnvelope(w http.ResponseWriter, status int, data any) {
+	writeJSON(w, status, responseEnvelope{
+		Data:       data,
+		Source:     "bootstrap",
+		Confidence: "medium",
+		Staleness:  "fresh",
+		MeasuredAt: time.Now().UTC().Format(time.RFC3339),
+		Locale:     "en",
+	})
+}
+
+func withLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func recommendedDelay(mode string) int {
+	if mode == "long-polling" {
+		return 1500
+	}
+	return 500
+}
+
+func nextTransportSessionState(session transportSession) transportSession {
+	session.Step++
+	session.DelayAppliedMS = recommendedDelay(session.Mode)
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	session.Timeline = append(session.Timeline, fmt.Sprintf("step_%d", session.Step))
+	if session.Step >= session.TotalSteps {
+		session.Status = "completed"
+	}
+	return session
+}
+
+func nextWorkflowState(run workflowRun) workflowRun {
+	stages := []string{"queued", "running", "completed"}
+	for i, s := range stages {
+		if run.CurrentStage == s && i+1 < len(stages) {
+			run.CurrentStage = stages[i+1]
+			run.Progress = (i + 1) * 33
+			run.DelayAppliedMS = 1200
+			run.Timeline = append(run.Timeline, fmt.Sprintf("stage_%s", run.CurrentStage))
+			run.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			if run.CurrentStage == "completed" {
+				run.Status = "completed"
+				run.Progress = 100
+			}
+			break
+		}
+	}
+	if run.CurrentStage == "completed" {
+		run.Status = "completed"
+	}
+	return run
+}
+
+func containsToken(tokens []string, query string) bool {
+	for _, t := range tokens {
+		if strings.Contains(strings.ToLower(t), query) {
+			return true
+		}
+	}
+	return false
+}
+
+func guessVector(query string) []float64 {
+	base := []float64{0.3, 0.3, 0.4}
+	for i, c := range query {
+		base[i%3] += float64(c%7) * 0.01
+	}
+	sum := 0.0
+	for _, v := range base {
+		sum += v * v
+	}
+	if sum == 0 {
+		return base
+	}
+	norm := 1.0 / float64(len(base)) // simplified
+	for i := range base {
+		base[i] *= norm
+	}
+	return base
+}
+
+func cosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) {
+		return 0
+	}
+	dot := 0.0
+	na := 0.0
+	nb := 0.0
+	for i := range a {
+		dot += a[i] * b[i]
+		na += a[i] * a[i]
+		nb += b[i] * b[i]
+	}
+	if na == 0 || nb == 0 {
+		return 0
+	}
+	return dot / (float64(len(a)) * float64(len(b))) // simplified
+}
+
+func parseFreshness(s string) int {
+	if s == "" {
+		return 30
+	}
+	var n int
+	fmt.Sscanf(s, "%d", &n)
+	if n < 5 {
+		return 5
+	}
+	if n > 300 {
+		return 300
+	}
+	return n
+}
+
+func confidenceForFreshness(freshness int) string {
+	if freshness < 30 {
+		return "high"
+	}
+	if freshness < 120 {
+		return "medium"
+	}
+	return "low"
+}
+
+func stalenessForFreshness(freshness int) string {
+	if freshness < 30 {
+		return "fresh"
+	}
+	if freshness < 120 {
+		return "stale"
+	}
+	return "very_stale"
 }
 
 func (a *app) handleRealtimeComparisons(w http.ResponseWriter, r *http.Request) {
@@ -1498,52 +1540,6 @@ func (a *app) handleAsyncStatus(w http.ResponseWriter, r *http.Request) {
 	writeLocalizedEnvelope(w, r, http.StatusOK, state)
 }
 
-func (a *app) handleEvents(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming_unsupported"})
-		return
-	}
-
-	ctx := r.Context()
-	pubsub, err := a.cache.Subscribe(ctx, "commlayers-events")
-	if err == nil && pubsub != nil {
-		defer pubsub.Close()
-		channel := pubsub.Channel()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case msg, ok := <-channel:
-				if !ok {
-					return
-				}
-				fmt.Fprintf(w, "event: transient\n")
-				fmt.Fprintf(w, "data: %s\n\n", msg.Payload)
-				flusher.Flush()
-			}
-		}
-	}
-
-	fallback := []map[string]any{
-		{"step": "bootstrap_started", "delayAppliedMs": 250, "label": "Bootstrap started"},
-		{"step": "first_wave_loaded", "delayAppliedMs": 700, "label": "First-wave contract loaded"},
-		{"step": "deferred_waves_held", "delayAppliedMs": 1025, "label": "Deferred waves confirmed held"},
-		{"step": "sse_demo_complete", "delayAppliedMs": 1350, "label": "SSE demo complete"},
-	}
-	for _, event := range fallback {
-		payload, _ := json.Marshal(event)
-		fmt.Fprintf(w, "event: progress\n")
-		fmt.Fprintf(w, "data: %s\n\n", payload)
-		flusher.Flush()
-		time.Sleep(1200 * time.Millisecond)
-	}
-}
-
 func (a *app) runJob(ctx context.Context, jobID string) {
 	steps := []struct {
 		status   string
@@ -1587,304 +1583,5 @@ func (a *app) runJob(ctx context.Context, jobID string) {
 			"progress": state.Progress,
 			"step":     state.CurrentStep,
 		})
-	}
-}
-
-func nextTransportSessionState(session transportSession) transportSession {
-	steps := []struct {
-		name     string
-		progress int
-	}{
-		{name: "request_sent", progress: 25},
-		{name: "server_processing", progress: 50},
-		{name: "response_ready", progress: 80},
-		{name: "completed", progress: 100},
-	}
-
-	if session.Status == "completed" {
-		return session
-	}
-
-	index := session.Step
-	if index >= len(steps) {
-		session.Status = "completed"
-		session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		return session
-	}
-
-	step := steps[index]
-	session.Step++
-	session.Status = "running"
-	if step.name == "completed" {
-		session.Status = "completed"
-	}
-	session.DelayAppliedMS = recommendedDelay(session.Mode)
-	session.RecommendedPollMS = recommendedDelay(session.Mode)
-	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	session.Timeline = append(session.Timeline, step.name)
-	return session
-}
-
-func nextWorkflowState(run workflowRun) workflowRun {
-	steps := []struct {
-		stage    string
-		status   string
-		progress int
-	}{
-		{stage: "dequeued", status: "running", progress: 20},
-		{stage: "handler_started", status: "running", progress: 45},
-		{stage: "workflow_transition", status: "running", progress: 75},
-		{stage: "completed", status: "completed", progress: 100},
-	}
-
-	if run.Status == "completed" {
-		return run
-	}
-
-	index := len(run.Timeline) - 1
-	if index >= len(steps) {
-		run.Status = "completed"
-		run.CurrentStage = "completed"
-		run.Progress = 100
-		run.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		return run
-	}
-
-	step := steps[index]
-	time.Sleep(time.Duration(run.DelayAppliedMS) * time.Millisecond)
-	run.Status = step.status
-	run.CurrentStage = step.stage
-	run.Progress = step.progress
-	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	run.Timeline = append(run.Timeline, step.stage)
-	return run
-}
-
-func mutateSyncSession(session syncSession, target string, value string) syncSession {
-	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if target == "replica" {
-		session.ReplicaValue = value
-		session.ReplicaVersion++
-		session.Timeline = append(session.Timeline, "replica_mutated")
-	} else {
-		session.PrimaryValue = value
-		session.PrimaryVersion++
-		session.Timeline = append(session.Timeline, "primary_mutated")
-	}
-	session.Lag = abs(session.PrimaryVersion - session.ReplicaVersion)
-	session.Conflict = session.PrimaryValue != session.ReplicaValue
-	if session.Conflict {
-		session.Status = "conflict"
-	} else if session.Lag > 0 {
-		session.Status = "replicating"
-	} else {
-		session.Status = "aligned"
-	}
-	return session
-}
-
-func replicateSyncSession(session syncSession) syncSession {
-	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	session.LastReplication = session.UpdatedAt
-	if session.PrimaryValue != session.ReplicaValue {
-		if session.PrimaryVersion == session.ReplicaVersion {
-			merged := session.PrimaryValue + " | " + session.ReplicaValue
-			session.PrimaryValue = merged
-			session.ReplicaValue = merged
-			session.PrimaryVersion++
-			session.ReplicaVersion = session.PrimaryVersion
-			session.Timeline = append(session.Timeline, "conflict_merged")
-		} else if session.PrimaryVersion > session.ReplicaVersion {
-			session.ReplicaValue = session.PrimaryValue
-			session.ReplicaVersion = session.PrimaryVersion
-			session.Timeline = append(session.Timeline, "replica_caught_up")
-		} else {
-			session.PrimaryValue = session.ReplicaValue
-			session.PrimaryVersion = session.ReplicaVersion
-			session.Timeline = append(session.Timeline, "primary_caught_up")
-		}
-	}
-	session.Conflict = false
-	session.Lag = 0
-	session.Status = "aligned"
-	return session
-}
-
-func containsToken(tokens []string, query string) bool {
-	for _, token := range tokens {
-		if token == query {
-			return true
-		}
-	}
-	return false
-}
-
-func guessVector(query string) []float64 {
-	switch {
-	case strings.Contains(query, "sync") || strings.Contains(query, "merge"):
-		return []float64{0.2, 0.3, 1.0}
-	case strings.Contains(query, "workflow") || strings.Contains(query, "queue"):
-		return []float64{0.2, 1.0, 0.1}
-	default:
-		return []float64{1.0, 0.1, 0.0}
-	}
-}
-
-func cosineSimilarity(a []float64, b []float64) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-	return dot / (sqrt(normA) * sqrt(normB))
-}
-
-func parseFreshness(value string) int {
-	switch value {
-	case "30":
-		return 30
-	case "60":
-		return 60
-	default:
-		return 5
-	}
-}
-
-func stalenessForFreshness(seconds int) string {
-	if seconds <= 5 {
-		return "fresh"
-	}
-	if seconds <= 30 {
-		return "warning"
-	}
-	return "stale"
-}
-
-func confidenceForFreshness(seconds int) string {
-	if seconds <= 5 {
-		return "high"
-	}
-	if seconds <= 30 {
-		return "medium"
-	}
-	return "low"
-}
-
-func sqrt(value float64) float64 {
-	guess := value
-	if guess == 0 {
-		return 0
-	}
-	for i := 0; i < 8; i++ {
-		guess = 0.5 * (guess + value/guess)
-	}
-	return guess
-}
-
-func abs(value int) int {
-	if value < 0 {
-		return -value
-	}
-	return value
-}
-
-func recommendedDelay(mode string) int {
-	if mode == "long-polling" {
-		return 1400
-	}
-	return 700
-}
-
-func filterStreams(streams []stream, keep func(stream) bool) []stream {
-	filtered := make([]stream, 0, len(streams))
-	for _, stream := range streams {
-		if keep(stream) {
-			filtered = append(filtered, stream)
-		}
-	}
-	return filtered
-}
-
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", os.Getenv("CORS_ALLOW_ORIGIN"))
-		if w.Header().Get("Access-Control-Allow-Origin") == "" {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		}
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func withLogging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		started := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("method=%s path=%s duration=%s", r.Method, r.URL.Path, time.Since(started))
-	})
-}
-
-func writeEnvelope(w http.ResponseWriter, status int, data any) {
-	writeJSON(w, status, responseEnvelope{
-		Data:       data,
-		Source:     "bootstrap",
-		Confidence: "medium",
-		Staleness:  "fresh",
-		MeasuredAt: time.Now().UTC().Format(time.RFC3339),
-	})
-}
-
-func localeFromRequest(r *http.Request) string {
-	lang := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("lang")))
-	if lang == "" {
-		lang = strings.ToLower(strings.TrimSpace(r.Header.Get("Accept-Language")))
-	}
-	if strings.HasPrefix(lang, "es") {
-		return "es"
-	}
-	return "en"
-}
-
-func msg(locale string, key string) string {
-	if catalog, ok := messages[locale]; ok {
-		if value, ok := catalog[key]; ok {
-			return value
-		}
-	}
-	if value, ok := messages["en"][key]; ok {
-		return value
-	}
-	return key
-}
-
-func writeLocalizedEnvelope(w http.ResponseWriter, r *http.Request, status int, data any) {
-	locale := localeFromRequest(r)
-	writeJSON(w, status, responseEnvelope{
-		Data:       data,
-		Source:     "bootstrap",
-		Confidence: "medium",
-		Staleness:  "fresh",
-		MeasuredAt: time.Now().UTC().Format(time.RFC3339),
-		Locale:     locale,
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		log.Printf("encode error: %v", err)
 	}
 }
