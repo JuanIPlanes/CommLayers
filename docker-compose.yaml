@@ -1,0 +1,44 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:13
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=comm_user
+      - POSTGRES_PASSWORD=comm_password
+      - POSTGRES_DB=comm_layers
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:6-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:21.1.0
+    environment:
+      - KC_ADMIN=admin
+      - KC_ADMIN_PASSWORD=admin
+      - KC_HEALTH_ENABLED=true
+      - KC_DB=postgres
+      - KC_POSTGRES_HOST=postgres
+      - KC_POSTGRES_PORT=5432
+      - KC_POSTGRES_DATABASE=comm_layers
+      - KC_POSTGRES_USER=comm_user
+      - KC_POSTGRES_PASSWORD=comm_password
+      - KC_HOSTNAME=keycloak
+    ports:
+      - "8081:8080"
+    command: ["start-dev"]
+    depends_on:
+      - postgres
+
+volumes:
+  postgres-data:
+  redis-data:

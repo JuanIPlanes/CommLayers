@@ -1,0 +1,10 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "mcp": {
+    "clickup": {
+      "type": "url",
+      "url": "https://mcp.clickup.com/mcp",
+      "enabled": true
+    }
+  }
+}

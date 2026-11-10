@@ -1,0 +1,84 @@
+{
+  "info": {
+    "name": "CommLayers API - v2",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{url}}/health",
+          "host": ["{{url}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Status - list items",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [ { "key": "token", "value": "{{authToken}}", "type": "string" } ]
+        },
+        "url": {
+          "raw": "{{url}}/items",
+          "host": ["{{url}}"],
+          "path": ["items"]
+        }
+      }
+    },
+    {
+      "name": "Create item",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json", "description": "" } ],
+        "auth": {
+          "type": "bearer",
+          "bearer": [ { "key": "token", "value": "{{authToken}}", "type": "string" } ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{ \"name\": \"sample\", \"description\": \"A sample item\" }"
+        },
+        "url": {
+          "raw": "{{url}}/items",
+          "host": ["{{url}}"],
+          "path": ["items"]
+        }
+      }
+    },
+    {
+      "name": "Login (mock)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "url": {
+          "raw": "{{url}}/login",
+          "host": ["{{url}}"],
+          "path": ["login"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"user\",\n  \"password\": \"pass\"\n}"
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "url",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
