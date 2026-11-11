@@ -3,10 +3,13 @@ package keycloak
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"commlayers/services/api/internal/security"
 )
 
 // BFFSession represents a BFF (Backend-for-Frontend) session
@@ -267,4 +270,95 @@ func DeleteSession(ctx context.Context, sessionID string) error {
 // RefreshSession refreshes a session's expiration
 func RefreshSession(ctx context.Context, sessionID string) (*BFFSession, error) {
 	return sessionStore.Refresh(ctx, sessionID)
+}
+
+// PKIIntegration provides integration points between Keycloak and PKI observability.
+
+// PKIConfig holds PKI observability configuration for Keycloak integration.
+type PKIConfig struct {
+	// ExpiryAlertDays is the number of days before expiry to alert.
+	ExpiryAlertDays int
+	// InitialMTLSPhase is the starting mTLS rollout phase (1-3).
+	InitialMTLSPhase int
+}
+
+// InitKeycloakWithPKI initializes Keycloak with PKI observability integration.
+func InitKeycloakWithPKI(config *PKIConfig) {
+	InitKeycloak()
+	if config == nil {
+		config = &PKIConfig{
+			ExpiryAlertDays:  30,
+			InitialMTLSPhase: 1,
+		}
+	}
+	security.InitPKIObservability(&security.PKIConfig{
+		ExpiryAlertDays:   config.ExpiryAlertDays,
+		InitialMTLSPhase:  config.InitialMTLSPhase,
+		AuditLogger:       &pkiAuditLoggerAdapter{logger: auditLogger},
+	})
+}
+
+// pkiAuditLoggerAdapter adapts Keycloak's AuditLogger to security.AuditLogger.
+type pkiAuditLoggerAdapter struct {
+	logger AuditLogger
+}
+
+func (a *pkiAuditLoggerAdapter) Log(ctx context.Context, event security.AuditEvent) error {
+	// Convert security.AuditEvent to keycloak.AuditEvent
+	kevent := AuditEvent{
+		ID:        event.ID,
+		Timestamp: event.Timestamp,
+		UserID:    event.UserID,
+		SessionID: event.SessionID,
+		Action:    event.Action,
+		Resource:  event.Resource,
+		Method:    event.Method,
+		Path:      event.Path,
+		IP:        event.IP,
+		UserAgent: event.UserAgent,
+		Status:    event.Status,
+		Metadata:  event.Metadata,
+	}
+	return a.logger.Log(ctx, kevent)
+}
+
+// GetPKIObservability returns the PKI observability instance.
+func GetPKIObservability() *security.PKIObservability {
+	return security.GetPKIObservability()
+}
+
+// PKIMiddleware returns middleware that combines Keycloak auth with PKI observability.
+func PKIMiddleware(next http.Handler) http.Handler {
+	pki := GetPKIObservability()
+	if pki == nil || !pki.IsEnabled() {
+		return KeycloakMiddleware(next)
+	}
+	// Chain: PKI middleware -> Keycloak middleware -> next
+	return pki.PKIMiddleware(KeycloakMiddleware(next))
+}
+
+// RecordClientCertificate records a client certificate from the request for PKI tracking.
+func RecordClientCertificate(r *http.Request, service string) error {
+	pki := GetPKIObservability()
+	if pki == nil || !pki.IsEnabled() {
+		return nil
+	}
+
+	// Check for client certificate in TLS connection state
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		cert := r.TLS.PeerCertificates[0]
+		// PEM-encode the certificate
+		pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+		_, err := pki.RecordCertificate(r.Context(), pemData, "tls-handshake", service)
+		return err
+	}
+	return nil
+}
+
+// SetMTLSPhase updates the mTLS rollout phase globally.
+func SetMTLSPhase(phase int) {
+	pki := GetPKIObservability()
+	if pki != nil {
+		pki.SetMTLSPhase(phase)
+	}
 }

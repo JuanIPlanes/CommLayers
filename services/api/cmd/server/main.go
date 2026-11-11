@@ -11,11 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"commlayers/services/api/internal/auth"
 	"commlayers/services/api/internal/cache"
 	"commlayers/services/api/internal/messaging"
 	"commlayers/services/api/internal/persistence"
 	"commlayers/services/api/internal/projection"
 	"commlayers/services/api/internal/router"
+	"commlayers/services/api/internal/security"
 
 	"github.com/gorilla/websocket"
 )
@@ -25,6 +27,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Initialize PKI observability with Keycloak integration
+	keycloak.InitKeycloakWithPKI(&keycloak.PKIConfig{
+		ExpiryAlertDays:  30,
+		InitialMTLSPhase: 1,
+	})
 
 	bm := router.NewBenchmarkMiddleware()
 
@@ -36,6 +44,12 @@ func main() {
 	mux.HandleFunc("/api/first-wave/contract", application.handleFirstWaveContract)
 	mux.HandleFunc("/api/first-wave/streams/", application.handleFirstWaveStream)
 	mux.HandleFunc("/api/security/bootstrap", application.handleSecurityBootstrap)
+	// PKI Observability endpoints
+	mux.HandleFunc("/api/security/pki/certificates", application.handlePKICertificates)
+	mux.HandleFunc("/api/security/pki/mtls-status", application.handlePKIMTLSStatus)
+	mux.HandleFunc("/api/security/pki/trust-boundaries", application.handlePKITrustBoundaries)
+	mux.HandleFunc("/api/security/pki/rotation-schedule", application.handlePKIRotationSchedule)
+	mux.HandleFunc("/api/security/pki/summary", application.handlePKISummary)
 	mux.HandleFunc("/api/data-platform", application.handleDataPlatform)
 	mux.HandleFunc("/api/benchmark-framework", application.handleBenchmarkFramework)
 	mux.HandleFunc("/api/deferred-waves", application.handleDeferredWaves)
@@ -470,6 +484,135 @@ func (a *app) handleSecurityBootstrap(w http.ResponseWriter, r *http.Request) {
 		},
 		"currentState": msg(locale, "security.state"),
 	})
+}
+
+// handlePKICertificates returns all tracked certificates.
+func (a *app) handlePKICertificates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	pki := security.GetPKIObservability()
+	if pki == nil || !pki.IsEnabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pki_observability_not_initialized"})
+		return
+	}
+
+	certs := pki.GetCertificates()
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"certificates": certs,
+		"count":        len(certs),
+		"timestamp":    time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handlePKIMTLSStatus returns mTLS connection status matrix.
+func (a *app) handlePKIMTLSStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	pki := security.GetPKIObservability()
+	if pki == nil || !pki.IsEnabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pki_observability_not_initialized"})
+		return
+	}
+
+	conns := pki.GetMTLSStatus()
+	matrix := pki.MTLSStatusTracker().GetConnectionMatrix()
+
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"connections":    conns,
+		"matrix":         matrix,
+		"current_phase":  pki.MTLSStatusTracker().GetPhase(),
+		"count":          len(conns),
+		"verified_count": countVerified(conns),
+		"timestamp":      time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handlePKITrustBoundaries returns trust boundary compliance status.
+func (a *app) handlePKITrustBoundaries(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	pki := security.GetPKIObservability()
+	if pki == nil || !pki.IsEnabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pki_observability_not_initialized"})
+		return
+	}
+
+	// Evaluate compliance on demand
+	pki.EvaluateTrustBoundaries(r.Context())
+	boundaries := pki.GetTrustBoundaries()
+
+	compliant := 0
+	nonCompliant := 0
+	for _, b := range boundaries {
+		if b.Compliant {
+			compliant++
+		} else {
+			nonCompliant++
+		}
+	}
+
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"boundaries":         boundaries,
+		"total":              len(boundaries),
+		"compliant":          compliant,
+		"non_compliant":      nonCompliant,
+		"timestamp":          time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handlePKIRotationSchedule returns upcoming certificate rotations.
+func (a *app) handlePKIRotationSchedule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	pki := security.GetPKIObservability()
+	if pki == nil || !pki.IsEnabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pki_observability_not_initialized"})
+		return
+	}
+
+	schedule := pki.GetRotationSchedule()
+
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"rotation_schedule": schedule,
+		"count":             len(schedule),
+		"timestamp":         time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handlePKISummary returns a summary of PKI observability state.
+func (a *app) handlePKISummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	pki := security.GetPKIObservability()
+	if pki == nil || !pki.IsEnabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pki_observability_not_initialized"})
+		return
+	}
+
+	summary := pki.GetPKISummary()
+	summary["timestamp"] = time.Now().UTC().Format(time.RFC3339)
+
+	writeLocalizedEnvelope(w, r, http.StatusOK, summary)
 }
 
 func (a *app) handleDataPlatform(w http.ResponseWriter, r *http.Request) {
@@ -1786,4 +1929,14 @@ func (a *app) handleProjectionReindexHistory(w http.ResponseWriter, r *http.Requ
 	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"reindex_history": history,
 	})
+}
+
+func countVerified(conns []*security.MTLSConnection) int {
+	count := 0
+	for _, c := range conns {
+		if c.Verified {
+			count++
+		}
+	}
+	return count
 }

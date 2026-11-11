@@ -1,8 +1,11 @@
 package backend
 
 import (
+	"fmt"
 	"sync"
 	"time"
+
+	"commlayers/services/api/internal/evidence"
 )
 
 // AsyncVisibilityBenchmarks defines how async queue delay, timeout visibility,
@@ -97,6 +100,8 @@ type BenchmarkRun struct {
 	Success bool `json:"success"`
 	// Notes contains any additional notes about the benchmark run.
 	Notes string `json:"notes,omitempty"`
+	// Evidence is the formal evidence contract for this run.
+	Evidence *evidence.EvidenceContract `json:"evidence,omitempty"`
 }
 
 // BenchmarkSummary is a summary of multiple benchmark runs.
@@ -115,6 +120,8 @@ type BenchmarkSummary struct {
 	SuccessfulRuns int `json:"successful_runs"`
 	// Timestamp when the summary was computed.
 	ComputedAt time.Time `json:"computed_at"`
+	// Evidence is the aggregate evidence contract for the summary.
+	Evidence *evidence.EvidenceContract `json:"evidence,omitempty"`
 }
 
 // BenchmarkOptions configures how async visibility benchmarks are collected.
@@ -204,45 +211,100 @@ func (bc *BenchmarkCollector) ComputeSummary() *BenchmarkSummary {
 	bc.sampleMu.Lock()
 	defer bc.sampleMu.Unlock()
 
+	now := time.Now()
+	totalSamples := len(bc.queueDelaySamples) + len(bc.timeoutSamples) + len(bc.transitionSamples)
+
 	summary := &BenchmarkSummary{
-		Runs:             []BenchmarkRun{},
-		TotalRuns:        len(bc.queueDelaySamples) + len(bc.timeoutSamples) + len(bc.transitionSamples),
-		ComputedAt:       time.Now(),
+		Runs:        make([]BenchmarkRun, 0, totalSamples),
+		TotalRuns:   totalSamples,
+		ComputedAt:  now,
 	}
 
-	// Compute average queue delay
-	if len(bc.queueDelaySamples) > 0 {
-		var sum float64
-		for _, d := range bc.queueDelaySamples {
-			sum += d
+	var runID int
+	successCount := 0
+
+	// Create runs for queue delay samples
+	for _, d := range bc.queueDelaySamples {
+		runID++
+		run := BenchmarkRun{
+			ID:           fmt.Sprintf("queue_delay_%d", runID),
+			StartedAt:    now,
+			CompletedAt:  now,
+			QueueDelayMs: d,
+			Success:      true,
+			Evidence:     createBenchmarkEvidence(fmt.Sprintf("queue_delay_%d", runID), d, 0, 0, 1),
 		}
-		summary.AverageQueueDelayMs = sum / float64(len(bc.queueDelaySamples))
-		summary.Runs = append(summary.Runs, BenchmarkRun{
-			QueueDelayMs: bc.queueDelaySamples[0],
-			Success:        true,
-		})
-	}
-
-	// Compute average timeout
-	if len(bc.timeoutSamples) > 0 {
-		var sum float64
-		for _, t := range bc.timeoutSamples {
-			sum += t
+		summary.Runs = append(summary.Runs, run)
+		successCount++
+		if summary.AverageQueueDelayMs == 0 {
+			summary.AverageQueueDelayMs = d
+		} else {
+			summary.AverageQueueDelayMs = (summary.AverageQueueDelayMs + d) / 2
 		}
-		summary.AverageTimeoutMs = sum / float64(len(bc.timeoutSamples))
 	}
 
-	// Compute average transition
-	if len(bc.transitionSamples) > 0 {
-		var sum float64
-		for _, t := range bc.transitionSamples {
-			sum += t
+	// Create runs for timeout samples
+	for _, t := range bc.timeoutSamples {
+		runID++
+		run := BenchmarkRun{
+			ID:         fmt.Sprintf("timeout_%d", runID),
+			StartedAt:  now,
+			CompletedAt: now,
+			TimeoutMs:  t,
+			Success:    true,
+			Evidence:   createBenchmarkEvidence(fmt.Sprintf("timeout_%d", runID), 0, t, 0, 1),
 		}
-		summary.AverageTransitionMs = sum / float64(len(bc.transitionSamples))
+		summary.Runs = append(summary.Runs, run)
+		successCount++
+		if summary.AverageTimeoutMs == 0 {
+			summary.AverageTimeoutMs = t
+		} else {
+			summary.AverageTimeoutMs = (summary.AverageTimeoutMs + t) / 2
+		}
 	}
 
-	// Count successful runs
-	summary.SuccessfulRuns = len(bc.queueDelaySamples) + len(bc.timeoutSamples) + len(bc.transitionSamples)
+	// Create runs for transition samples
+	for _, t := range bc.transitionSamples {
+		runID++
+		run := BenchmarkRun{
+			ID:            fmt.Sprintf("transition_%d", runID),
+			StartedAt:     now,
+			CompletedAt:   now,
+			TransitionMs:  t,
+			Success:       true,
+			Evidence:      createBenchmarkEvidence(fmt.Sprintf("transition_%d", runID), 0, 0, t, 1),
+		}
+		summary.Runs = append(summary.Runs, run)
+		successCount++
+		if summary.AverageTransitionMs == 0 {
+			summary.AverageTransitionMs = t
+		} else {
+			summary.AverageTransitionMs = (summary.AverageTransitionMs + t) / 2
+		}
+	}
+
+	summary.SuccessfulRuns = successCount
+
+	// Create aggregate evidence for the summary
+	summary.Evidence = createAggregateEvidence(summary)
 
 	return summary
+}
+
+// createBenchmarkEvidence creates an evidence contract for a single benchmark run.
+func createBenchmarkEvidence(runID string, queueDelay, timeout, transition float64, sampleCount int) *evidence.EvidenceContract {
+	benchEv := evidence.NewBenchmarkEvidence(runID, queueDelay, timeout, transition, sampleCount)
+	return evidence.NewSuccessContract(benchEv.Evidence, evidence.SuccessOK)
+}
+
+// createAggregateEvidence creates an aggregate evidence contract for a benchmark summary.
+func createAggregateEvidence(summary *BenchmarkSummary) *evidence.EvidenceContract {
+	aggEv := evidence.Evidence{
+		Source:         evidence.SourceBenchmark,
+		Confidence:     1.0,
+		Staleness:      evidence.StalenessFresh,
+		MeasuredAt:     summary.ComputedAt,
+		DelayAppliedMs: 0,
+	}
+	return evidence.NewSuccessContract(aggEv, evidence.SuccessOK)
 }
