@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"commlayers/services/api/internal/cache"
+	"commlayers/services/api/internal/messaging"
 	"commlayers/services/api/internal/persistence"
+	"commlayers/services/api/internal/projection"
 	"commlayers/services/api/internal/router"
 
 	"github.com/gorilla/websocket"
@@ -45,6 +47,9 @@ func main() {
 	mux.HandleFunc("/api/messaging", application.handleMessagingOverview)
 	mux.HandleFunc("/api/messaging/workflows", application.handleWorkflowCreate)
 	mux.HandleFunc("/api/messaging/workflows/", application.handleWorkflowStatus)
+	mux.HandleFunc("/api/messaging/failure-modes", application.handleMessagingFailureModes)
+	mux.HandleFunc("/api/messaging/failure-modes/workflow", application.handleWorkflowFailureModes)
+	mux.HandleFunc("/api/messaging/failure-modes/job-queue", application.handleJobQueueFailureModes)
 	mux.HandleFunc("/api/sync", application.handleSyncOverview)
 	mux.HandleFunc("/api/sync/sessions", application.handleSyncSessionCreate)
 	mux.HandleFunc("/api/sync/sessions/", application.handleSyncSessionAction)
@@ -52,6 +57,9 @@ func main() {
 	mux.HandleFunc("/api/projections/search", application.handleProjectionSearch)
 	mux.HandleFunc("/api/projections/graph", application.handleProjectionGraph)
 	mux.HandleFunc("/api/projections/vector", application.handleProjectionVector)
+	mux.HandleFunc("/api/projections/freshness", application.handleProjectionFreshness)
+	mux.HandleFunc("/api/projections/freshness/", application.handleProjectionFreshnessAction)
+	mux.HandleFunc("/api/projections/reindex/history", application.handleProjectionReindexHistory)
 	mux.HandleFunc("/api/pricing", application.handlePricingOverview)
 	mux.HandleFunc("/api/v2/roadmap", application.handleV2Roadmap)
 	mux.HandleFunc("/api/v2/paradigms/event-driven", application.handleV2EventDriven)
@@ -299,6 +307,9 @@ func newApp() (*app, error) {
 			{ID: "vec-2", Label: "Workflow queue", Vector: []float64{0.2, 0.9, 0.1}, Summary: "Queued and staged orchestration", Transport: "workflow"},
 			{ID: "vec-3", Label: "Sync conflict", Vector: []float64{0.2, 0.3, 0.95}, Summary: "Conflict and merge-heavy collaboration", Transport: "sync"},
 		},
+		workflowFailureMatrix: messaging.DefaultWorkflowFailureMatrix(),
+		jobQueueFailureMatrix: messaging.DefaultJobQueueFailureMatrix(),
+		projectionTracker:     projection.NewFreshnessTracker(projection.DefaultFreshnessConfig()),
 	}, nil
 }
 
@@ -876,8 +887,8 @@ func (a *app) handleMessagingOverview(w http.ResponseWriter, r *http.Request) {
 	locale := localeFromRequest(r)
 	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"families": []map[string]any{
-			{"name": "job_queue", "status": "demo-available", "useFor": []string{"background work", "deferred execution"}},
-			{"name": "workflow_engine", "status": "demo-available", "useFor": []string{"multi-stage orchestration", "retry visibility"}},
+			{"name": "job_queue", "status": "demo-available", "useFor": []string{"background work", "deferred execution"}, "failureModes": a.jobQueueFailureMatrix.Checks},
+			{"name": "workflow_engine", "status": "demo-available", "useFor": []string{"multi-stage orchestration", "retry visibility"}, "failureModes": a.workflowFailureMatrix.Checks},
 			{"name": "broker_event_bus", "status": "planned", "useFor": []string{"fan-out and durable eventing after bootstrap maturity"}},
 		},
 		"notes": []string{
@@ -978,11 +989,16 @@ func (a *app) handleSyncOverview(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleProjectionOverview(w http.ResponseWriter, r *http.Request) {
 	locale := localeFromRequest(r)
+	freshness := a.projectionTracker.GetAllFreshness()
+	freshnessSummary := make(map[string]string)
+	for pt, f := range freshness {
+		freshnessSummary[string(pt)] = string(f.Status)
+	}
 	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
 		"families": []map[string]any{
-			{"name": "search_projection", "status": "demo-available", "useFor": []string{"token lookup", "summary retrieval"}},
-			{"name": "graph_projection", "status": "demo-available", "useFor": []string{"dependency traversal", "topology visibility"}},
-			{"name": "vector_projection", "status": "demo-available", "useFor": []string{"similarity ranking", "capability clustering"}},
+			{"name": "search_projection", "status": "demo-available", "useFor": []string{"token lookup", "summary retrieval"}, "freshness": freshnessSummary["search"]},
+			{"name": "graph_projection", "status": "demo-available", "useFor": []string{"dependency traversal", "topology visibility"}, "freshness": freshnessSummary["graph"]},
+			{"name": "vector_projection", "status": "demo-available", "useFor": []string{"similarity ranking", "capability clustering"}, "freshness": freshnessSummary["vector"]},
 		},
 		"notes": []string{
 			msg(locale, "projection.note.one"),
@@ -999,10 +1015,14 @@ func (a *app) handleProjectionSearch(w http.ResponseWriter, r *http.Request) {
 			results = append(results, doc)
 		}
 	}
+	// Update freshness for search projection
+	a.projectionTracker.UpdateFreshness(r.Context(), projection.ProjectionTypeSearch, len(results), "")
+	freshness := a.projectionTracker.GetFreshness(projection.ProjectionTypeSearch)
 	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
-		"query":   query,
-		"results": results,
-		"mode":    "demo-inmemory-search",
+		"query":      query,
+		"results":    results,
+		"mode":       "demo-inmemory-search",
+		"freshness":  freshness.ToCheckResult(),
 	})
 }
 
@@ -1015,10 +1035,14 @@ func (a *app) handleProjectionGraph(w http.ResponseWriter, r *http.Request) {
 			edges = append(edges, map[string]string{"from": node.ID, "to": dep})
 		}
 	}
+	// Update freshness for graph projection
+	a.projectionTracker.UpdateFreshness(r.Context(), projection.ProjectionTypeGraph, len(nodes), "")
+	freshness := a.projectionTracker.GetFreshness(projection.ProjectionTypeGraph)
 	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
-		"nodes": nodes,
-		"edges": edges,
-		"mode":  "demo-inmemory-graph",
+		"nodes":     nodes,
+		"edges":     edges,
+		"mode":      "demo-inmemory-graph",
+		"freshness": freshness.ToCheckResult(),
 	})
 }
 
@@ -1043,10 +1067,14 @@ func (a *app) handleProjectionVector(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(rankedDocs, func(i, j int) bool { return rankedDocs[i].Score > rankedDocs[j].Score })
+	// Update freshness for vector projection
+	a.projectionTracker.UpdateFreshness(r.Context(), projection.ProjectionTypeVector, len(rankedDocs), "")
+	freshness := a.projectionTracker.GetFreshness(projection.ProjectionTypeVector)
 	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
-		"query":   query,
-		"results": rankedDocs,
-		"mode":    "demo-inmemory-vector",
+		"query":      query,
+		"results":    rankedDocs,
+		"mode":       "demo-inmemory-vector",
+		"freshness":  freshness.ToCheckResult(),
 	})
 }
 
@@ -1624,4 +1652,138 @@ func (a *app) runJob(ctx context.Context, jobID string) {
 			"step":     state.CurrentStep,
 		})
 	}
+}
+
+// ===== Messaging Failure Mode Handlers =====
+
+func (a *app) handleMessagingFailureModes(w http.ResponseWriter, r *http.Request) {
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"workflow_engine": a.workflowFailureMatrix,
+		"job_queue":       a.jobQueueFailureMatrix,
+	})
+}
+
+func (a *app) handleWorkflowFailureModes(w http.ResponseWriter, r *http.Request) {
+	// Run checks with demo metrics (healthy)
+	checks := messaging.RunFailureChecks(a.workflowFailureMatrix, messaging.DemoFailureMetrics())
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"family": "workflow_engine",
+		"checks": checks,
+		"summary": map[string]any{
+			"total":      len(checks),
+			"healthy":    countHealthy(checks),
+			"warnings":   countSeverity(checks, "warning"),
+			"critical":   countSeverity(checks, "critical"),
+		},
+	})
+}
+
+func (a *app) handleJobQueueFailureModes(w http.ResponseWriter, r *http.Request) {
+	// Run checks with demo metrics (with issues)
+	checks := messaging.RunFailureChecks(a.jobQueueFailureMatrix, messaging.DemoFailureMetricsWithIssues())
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"family": "job_queue",
+		"checks": checks,
+		"summary": map[string]any{
+			"total":      len(checks),
+			"healthy":    countHealthy(checks),
+			"warnings":   countSeverity(checks, "warning"),
+			"critical":   countSeverity(checks, "critical"),
+		},
+	})
+}
+
+func countHealthy(checks []messaging.FailureCheck) int {
+	count := 0
+	for _, c := range checks {
+		if c.Healthy {
+			count++
+		}
+	}
+	return count
+}
+
+func countSeverity(checks []messaging.FailureCheck, severity string) int {
+	count := 0
+	for _, c := range checks {
+		if !c.Healthy && c.Severity == severity {
+			count++
+		}
+	}
+	return count
+}
+
+// ===== Projection Freshness Handlers =====
+
+func (a *app) handleProjectionFreshness(w http.ResponseWriter, r *http.Request) {
+	freshness := a.projectionTracker.GetAllFreshness()
+	results := make(map[string]projection.FreshnessCheckResult)
+	for pt, f := range freshness {
+		results[string(pt)] = f.ToCheckResult()
+	}
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"projections": results,
+	})
+}
+
+func (a *app) handleProjectionFreshnessAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
+		return
+	}
+
+	projectionType := strings.TrimPrefix(r.URL.Path, "/api/projections/freshness/")
+	if projectionType == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing_projection_type"})
+		return
+	}
+
+	var pt projection.ProjectionType
+	switch projectionType {
+	case "search":
+		pt = projection.ProjectionTypeSearch
+	case "graph":
+		pt = projection.ProjectionTypeGraph
+	case "vector":
+		pt = projection.ProjectionTypeVector
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_projection_type"})
+		return
+	}
+
+	action := r.URL.Query().Get("action")
+	if action == "" {
+		action = "reindex"
+	}
+
+	var err error
+	switch action {
+	case "reindex":
+		err = a.projectionTracker.TriggerManualReindex(r.Context(), pt, "manual API trigger")
+	case "refresh":
+		// Just update freshness from source (simulated)
+		a.projectionTracker.UpdateFreshness(r.Context(), pt, 0, "")
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_action"})
+		return
+	}
+
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeLocalizedEnvelope(w, r, http.StatusAccepted, map[string]any{
+		"projection_type": projectionType,
+		"action":          action,
+		"status":          "triggered",
+	})
+}
+
+func (a *app) handleProjectionReindexHistory(w http.ResponseWriter, r *http.Request) {
+	history := a.projectionTracker.GetReindexHistory(20)
+	writeLocalizedEnvelope(w, r, http.StatusOK, map[string]any{
+		"reindex_history": history,
+	})
 }

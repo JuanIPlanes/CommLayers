@@ -6,25 +6,30 @@ import (
 	"commlayers/services/api/internal/transport/vector"
 	"commlayers/services/api/internal/cache"
 	"commlayers/services/api/internal/persistence"
+	"commlayers/services/api/internal/messaging"
+	"commlayers/services/api/internal/projection"
 )
 
 
 type app struct {
-	startedAt      time.Time
-	store          *persistence.Store
-	cache          *cache.Cache
-	jobs           sync.Map
-	sessions       sync.Map
-	workflows      sync.Map
-	syncRuns       sync.Map
-	projectionDocs []projectionDoc
-	graphNodes     []graphNode
-	vectorDocs     []vectorDoc
-	streams        []stream
-	families       []family
-	waves          []deferredWave
-	neo4jTransport *graph.Neo4jTransport
-	qdrantTransport *vector.QdrantTransport
+	startedAt               time.Time
+	store                   *persistence.Store
+	cache                   *cache.Cache
+	jobs                    sync.Map
+	sessions                sync.Map
+	workflows               sync.Map
+	syncRuns                sync.Map
+	projectionDocs          []projectionDoc
+	graphNodes              []graphNode
+	vectorDocs              []vectorDoc
+	streams                 []stream
+	families                []family
+	waves                   []deferredWave
+	neo4jTransport          *graph.Neo4jTransport
+	qdrantTransport         *vector.QdrantTransport
+	workflowFailureMatrix   *messaging.FailureModeMatrix
+	jobQueueFailureMatrix   *messaging.FailureModeMatrix
+	projectionTracker       *projection.FreshnessTracker
 }
 
 type stream struct {

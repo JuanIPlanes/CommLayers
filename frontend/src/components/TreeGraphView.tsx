@@ -4,6 +4,7 @@ import * as d3Selection from 'd3-selection'
 import * as d3Drag from 'd3-drag'
 import { GraphData, NodeData, EdgeData, NodeId } from '../types'
 
+// Core Types
 interface TreeGraphViewProps {
   graphData: GraphData
   selectedNodeId: NodeId | null
@@ -29,6 +30,142 @@ interface SimLink extends EdgeData {
   target: SimNode
 }
 
+// FPS Monitoring Types
+interface FPSMetrics {
+  current: number
+  average: number
+  min: number
+  max: number
+  frameCount: number
+  lastUpdate: number
+}
+
+interface ComparisonVerificationResult {
+  mode: 'technical' | 'paradigms'
+  nodeCount: number
+  edgeCount: number
+  renderTimeMs: number
+  fps: number
+  passed: boolean
+  thresholds: {
+    minFPS: number
+    maxRenderTimeMs: number
+  }
+}
+
+// FPS Monitor Hook
+const useFPSMonitor = (enabled: boolean = true) => {
+  const metricsRef = useRef<FPSMetrics>({
+    current: 0,
+    average: 0,
+    min: 60,
+    max: 0,
+    frameCount: 0,
+    lastUpdate: performance.now(),
+  })
+  const frameTimesRef = useRef<number[]>([])
+  const animationFrameRef = useRef<number>()
+  const [fps, setFPS] = useState<number>(0)
+  const [avgFPS, setAvgFPS] = useState<number>(0)
+
+  const start = useCallback(() => {
+    if (!enabled) return
+    const tick = (now: number) => {
+      const metrics = metricsRef.current
+      const delta = now - metrics.lastUpdate
+      metrics.frameCount++
+      
+      if (delta >= 1000) {
+        const currentFPS = Math.round((metrics.frameCount * 1000) / delta)
+        metrics.current = currentFPS
+        metrics.min = Math.min(metrics.min, currentFPS)
+        metrics.max = Math.max(metrics.max, currentFPS)
+        
+        frameTimesRef.current.push(currentFPS)
+        if (frameTimesRef.current.length > 60) {
+          frameTimesRef.current.shift()
+        }
+        
+        const avg = frameTimesRef.current.reduce((a, b) => a + b, 0) / frameTimesRef.current.length
+        metrics.average = Math.round(avg)
+        
+        setFPS(currentFPS)
+        setAvgFPS(Math.round(avg))
+        
+        metrics.frameCount = 0
+        metrics.lastUpdate = now
+      }
+      
+      animationFrameRef.current = requestAnimationFrame(tick)
+    }
+    animationFrameRef.current = requestAnimationFrame(tick)
+  }, [enabled])
+
+  const stop = useCallback(() => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+      animationFrameRef.current = undefined
+    }
+  }, [])
+
+  const reset = useCallback(() => {
+    metricsRef.current = {
+      current: 0,
+      average: 0,
+      min: 60,
+      max: 0,
+      frameCount: 0,
+      lastUpdate: performance.now(),
+    }
+    frameTimesRef.current = []
+    setFPS(0)
+    setAvgFPS(0)
+  }, [])
+
+  const getMetrics = useCallback((): FPSMetrics => {
+    return { ...metricsRef.current }
+  }, [])
+
+  useEffect(() => {
+    if (enabled) {
+      start()
+    }
+    return () => stop()
+  }, [enabled, start, stop])
+
+  return { fps, avgFPS, start, stop, reset, getMetrics }
+}
+
+// Comparison Verification Hook
+const useComparisonVerification = () => {
+  const verify = useCallback((
+    mode: 'technical' | 'paradigms',
+    nodeCount: number,
+    edgeCount: number,
+    renderTimeMs: number,
+    currentFPS: number
+  ): ComparisonVerificationResult => {
+    const thresholds = {
+      minFPS: 30,
+      maxRenderTimeMs: 33.33, // ~30 FPS budget
+    }
+    
+    const passed = currentFPS >= thresholds.minFPS && renderTimeMs <= thresholds.maxRenderTimeMs
+    
+    return {
+      mode,
+      nodeCount,
+      edgeCount,
+      renderTimeMs,
+      fps: currentFPS,
+      passed,
+      thresholds,
+    }
+  }, [])
+
+  return { verify }
+}
+
 export const TreeGraphView: React.FC<TreeGraphViewProps> = ({
   graphData,
   selectedNodeId,
@@ -36,6 +173,7 @@ export const TreeGraphView: React.FC<TreeGraphViewProps> = ({
   onNodeHover,
   isFullScreen,
   highlightedPath = [],
+  connectionMode,
   width,
   height
 }) => {
@@ -45,6 +183,13 @@ export const TreeGraphView: React.FC<TreeGraphViewProps> = ({
   const [dimensions, setDimensions] = useState({ width, height })
   const animationFrameRef = useRef<number>()
   const nodesRef = useRef<Map<NodeId, d3Selection.Selection<SVGGElement, SimNode, any, unknown>>>(new Map())
+  
+  // FPS Monitoring
+  const { fps, avgFPS, getMetrics } = useFPSMonitor(true)
+  const { verify } = useComparisonVerification()
+  const [comparisonResult, setComparisonResult] = useState<ComparisonVerificationResult | null>(null)
+  const [showFPS, setShowFPS] = useState(false)
+  const renderStartRef = useRef<number>(0)
 
   useEffect(() => {
     setDimensions({ width, height })
@@ -105,6 +250,9 @@ export const TreeGraphView: React.FC<TreeGraphViewProps> = ({
     const svg = svgRef.current
     const sim = simulation
     if (!svg || !sim) return
+
+    // Track render start time for performance measurement
+    renderStartRef.current = performance.now()
 
     const nodes = sim.nodes() as SimNode[]
     const edges = graphData.edges as SimLink[]
@@ -301,7 +449,13 @@ export const TreeGraphView: React.FC<TreeGraphViewProps> = ({
         }
       }
     })
-  }, [simulation, graphData.edges, selectedNodeId, highlightedPath, onNodeClick, onNodeHover])
+
+    // Calculate render time and run comparison verification
+    const renderTimeMs = performance.now() - renderStartRef.current
+    const metrics = getMetrics()
+    const result = verify(connectionMode, graphData.nodes.length, graphData.edges.length, renderTimeMs, metrics.current)
+    setComparisonResult(result)
+  }, [simulation, graphData.edges, selectedNodeId, highlightedPath, onNodeClick, onNodeHover, connectionMode, getMetrics, verify])
 
   useEffect(() => {
     const sim = simulation
@@ -400,8 +554,122 @@ export const TreeGraphView: React.FC<TreeGraphViewProps> = ({
           <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <kbd style={{ padding: '2px 6px', border: '1px solid #222', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', fontFamily: 'inherit', fontWeight: 500 }}>Scroll</kbd> to zoom
           </span>
+          <span style={{ color: '#333' }}>·</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <kbd style={{ padding: '2px 6px', border: '1px solid #222', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', fontFamily: 'inherit', fontWeight: 500 }}>F</kbd> toggle FPS
+          </span>
         </div>
       )}
+
+      {/* FPS Overlay */}
+      {(showFPS || isFullScreen) && (
+        <div style={{
+          position: 'absolute',
+          top: '12px',
+          right: '12px',
+          zIndex: 20,
+          background: 'rgba(10,10,10,0.9)',
+          border: '1px solid #222',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          fontFamily: 'monospace',
+          fontSize: '11px',
+          color: '#ffffff',
+          minWidth: '180px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ color: '#888' }}>FPS Monitor</span>
+            <button
+              onClick={() => setShowFPS(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#666',
+                cursor: 'pointer',
+                fontSize: '14px',
+                padding: '0',
+                lineHeight: 1
+              }}
+              aria-label="Close FPS monitor"
+            >
+              ×
+            </button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <div>
+              <div style={{ color: '#666' }}>Current</div>
+              <div style={{ fontSize: '18px', fontWeight: 600, color: fps >= 50 ? '#00c864' : fps >= 30 ? '#ffb400' : '#ff4444' }}>
+                {fps}
+              </div>
+            </div>
+            <div>
+              <div style={{ color: '#666' }}>Average</div>
+              <div style={{ fontSize: '18px', fontWeight: 600, color: '#ffffff' }}>
+                {avgFPS}
+              </div>
+            </div>
+            <div>
+              <div style={{ color: '#666' }}>Min</div>
+              <div style={{ color: '#ff4444' }}>{getMetrics().min}</div>
+            </div>
+            <div>
+              <div style={{ color: '#666' }}>Max</div>
+              <div style={{ color: '#00c864' }}>{getMetrics().max}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comparison Verification Indicator */}
+      {comparisonResult && (
+        <div style={{
+          position: 'absolute',
+          top: showFPS || isFullScreen ? '140px' : '12px',
+          right: '12px',
+          zIndex: 20,
+          background: comparisonResult.passed ? 'rgba(0, 200, 100, 0.15)' : 'rgba(255, 68, 68, 0.15)',
+          border: `1px solid ${comparisonResult.passed ? '#00c864' : '#ff4444'}`,
+          borderRadius: '8px',
+          padding: '10px 12px',
+          fontFamily: 'monospace',
+          fontSize: '10px',
+          color: comparisonResult.passed ? '#00c864' : '#ff4444',
+          minWidth: '160px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+        }}>
+          <div style={{ fontWeight: 600, marginBottom: '6px', textTransform: 'uppercase' }}>
+            {comparisonResult.passed ? '✓ Verification Passed' : '✗ Verification Failed'}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '9px' }}>
+            <span style={{ color: '#888' }}>Mode</span>
+            <span>{comparisonResult.mode}</span>
+            <span style={{ color: '#888' }}>Nodes</span>
+            <span>{comparisonResult.nodeCount}</span>
+            <span style={{ color: '#888' }}>Edges</span>
+            <span>{comparisonResult.edgeCount}</span>
+            <span style={{ color: '#888' }}>Render</span>
+            <span>{comparisonResult.renderTimeMs.toFixed(2)}ms</span>
+            <span style={{ color: '#888' }}>FPS</span>
+            <span>{comparisonResult.fps}</span>
+            <span style={{ color: '#888' }}>Min FPS</span>
+            <span>{comparisonResult.thresholds.minFPS}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Keyboard shortcut for FPS toggle */}
+      <div
+        onKeyDown={(e) => {
+          if (e.key === 'f' || e.key === 'F') {
+            e.preventDefault()
+            setShowFPS(prev => !prev)
+          }
+        }}
+        tabIndex={0}
+        style={{ outline: 'none', position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+        aria-label="Press F to toggle FPS monitor"
+      />
     </div>
   )
 }
